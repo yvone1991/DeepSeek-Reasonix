@@ -14,8 +14,10 @@ use ratatui::Terminal;
 
 use reasonix_render::decode_only::run_decode_only;
 use reasonix_render::input::{is_quit, paste_event, translate_key, translate_mouse};
+use reasonix_render::producer::{build_setup_frame, build_trace_frame};
 use reasonix_render::render::render_frame;
 use reasonix_render::scene::SceneFrame;
+use reasonix_render::state::{Message, SceneState, SetupState};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -48,14 +50,38 @@ fn run_stream_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Res
         if line.trim().is_empty() {
             continue;
         }
-        let frame: SceneFrame =
-            serde_json::from_str(&line).with_context(|| format!("decode line {}", lineno + 1))?;
+        let frame = decode_to_frame(&line, terminal_size(terminal))
+            .with_context(|| format!("decode line {}", lineno + 1))?;
         terminal.draw(|f| {
             let area = f.area();
             render_frame(&frame, f.buffer_mut(), area);
         })?;
     }
     Ok(())
+}
+
+fn terminal_size(terminal: &Terminal<CrosstermBackend<io::Stdout>>) -> (u16, u16) {
+    match terminal.size() {
+        Ok(size) => (size.width, size.height),
+        Err(_) => (80, 24),
+    }
+}
+
+fn decode_to_frame(line: &str, (cols, rows): (u16, u16)) -> Result<SceneFrame> {
+    if let Ok(msg) = serde_json::from_str::<Message>(line) {
+        return Ok(match msg {
+            Message::Trace(state) => build_trace_frame(&state, cols, rows),
+            Message::Setup(state) => build_setup_frame(&state, cols, rows),
+        });
+    }
+    if let Ok(state) = serde_json::from_str::<SceneState>(line) {
+        return Ok(build_trace_frame(&state, cols, rows));
+    }
+    if let Ok(state) = serde_json::from_str::<SetupState>(line) {
+        return Ok(build_setup_frame(&state, cols, rows));
+    }
+    let legacy: SceneFrame = serde_json::from_str(line)?;
+    Ok(legacy)
 }
 
 fn run_emit_input() -> Result<()> {

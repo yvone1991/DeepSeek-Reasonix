@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
-import type { SceneFrame } from "./types.js";
 
 export type RendererProcess = {
-  emit(frame: SceneFrame): void;
+  emit(message: unknown): void;
   close(): Promise<number | null>;
 };
 
@@ -46,11 +45,11 @@ export function spawnRenderer(opts: SpawnRendererOptions = {}): RendererProcess 
   });
 
   return {
-    emit(frame: SceneFrame): void {
+    emit(message: unknown): void {
       if (exited) return;
       const stdin = child.stdin;
       if (!stdin || stdin.destroyed || !stdin.writable) return;
-      stdin.write(`${JSON.stringify(frame)}\n`);
+      stdin.write(`${JSON.stringify(message)}\n`);
     },
     close(): Promise<number | null> {
       const stdin = child.stdin;

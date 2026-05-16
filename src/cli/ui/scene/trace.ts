@@ -1,6 +1,5 @@
 import { appendFileSync, closeSync, openSync } from "node:fs";
 import { DEFAULT_COMMAND, type RendererProcess, spawnRenderer } from "./renderer-process.js";
-import type { SceneFrame } from "./types.js";
 
 const FILE_VAR = "REASONIX_SCENE_TRACE";
 const RENDERER_VAR = "REASONIX_RENDERER";
@@ -22,21 +21,24 @@ export function isSceneTraceEnabled(): boolean {
   return state.mode !== "off";
 }
 
-export function emitSceneFrame(frame: SceneFrame): void {
+export function emitSceneMessage(message: unknown): void {
   ensureInitialized();
   switch (state.mode) {
     case "off":
       return;
     case "file":
       if (state.path) {
-        appendFileSync(state.path, `${JSON.stringify(frame)}\n`);
+        appendFileSync(state.path, `${JSON.stringify(message)}\n`);
       }
       return;
     case "child":
-      state.child?.emit(frame);
+      state.child?.emit(message);
       return;
   }
 }
+
+/** @deprecated kept for transition only; prefer emitSceneMessage. */
+export const emitSceneFrame = emitSceneMessage;
 
 export function resetSceneTrace(): void {
   if (state.child) {
