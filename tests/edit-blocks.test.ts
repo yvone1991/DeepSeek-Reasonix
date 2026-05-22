@@ -266,6 +266,22 @@ describe("snapshotBeforeEdits + restoreSnapshots", () => {
     expect(snaps[0]!.prevContent).toBe("one two three\n");
   });
 
+  it("does not snapshot paths outside rootDir before apply rejects them", () => {
+    const outside = resolve(root, "..", "outside-secret.txt");
+    writeFileSync(outside, "SECRET_OUTSIDE_WORKSPACE", "utf8");
+    try {
+      const block = { path: outside, search: "SECRET", replace: "PUBLIC", offset: 0 };
+      const snaps = snapshotBeforeEdits([block], root);
+      const [result] = applyEditBlocks([block], root);
+
+      expect(snaps).toEqual([]);
+      expect(result!.status).toBe("path-escape");
+      expect(readFileSync(outside, "utf8")).toBe("SECRET_OUTSIDE_WORKSPACE");
+    } finally {
+      rmSync(outside, { force: true });
+    }
+  });
+
   it("restores multiple files in a single batch independently", () => {
     writeFileSync(join(root, "a.txt"), "aa\n", "utf8");
     writeFileSync(join(root, "b.txt"), "bb\n", "utf8");

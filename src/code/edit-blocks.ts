@@ -227,10 +227,12 @@ export interface EditSnapshot {
 
 /** De-duped by path — one "before" snapshot per file even with multiple blocks. */
 export function snapshotBeforeEdits(blocks: EditBlock[], rootDir: string): EditSnapshot[] {
+  const absRoot = resolve(rootDir);
   const seen = new Set<string>();
   const snapshots: EditSnapshot[] = [];
   for (const b of blocks) {
     const abs = resolveEditPath(rootDir, b.path);
+    if (!pathIsUnder(abs, absRoot)) continue;
     if (seen.has(abs)) continue;
     seen.add(abs);
     if (!existsSync(abs)) {
