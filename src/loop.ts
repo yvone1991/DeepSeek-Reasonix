@@ -268,6 +268,8 @@ export class CacheFirstLoop {
       getAbortSignal: () => this._turnAbort.signal,
       getCurrentTurn: () => this._turn,
       getSystemPrompt: () => this.prefix.system,
+      getToolSpecs: () => this.prefix.toolSpecs,
+      getFewShots: () => this.prefix.fewShots,
       onLogRewrite: () => this.readTracker.reset(),
     });
   }
