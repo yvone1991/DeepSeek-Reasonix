@@ -76,6 +76,17 @@ var Chinese = Messages{
 	ArgHooksTrust:   "信任本项目的 hooks",
 	ArgModelCurrent: "当前",
 
+	ListModelsHeaderFmt: "模型（当前：%s）",
+	ListModelsHint:      "用底部的模型切换器，或输入 /model <provider/model>",
+	ListMemoryHeader:    "记忆文件",
+	ListMemoryNone:      "暂无记忆 — 用 “#<内容>” 添加，或运行 /init 生成 AGENTS.md",
+	ListSkillsHeaderFmt: "skills（%d 个）",
+	ListSkillsNone:      "暂无 skill — 调用内置的（如 /init），或用 install_skill 创建一个",
+	ListHooksHeaderFmt:  "hooks（生效 %d 个）",
+	ListHooksNone:       "无生效 hooks — 在 .reasonix/settings.json（项目，需信任后）或 ~/.reasonix/settings.json（全局）配置",
+	ListMcpHeader:       "MCP 服务器",
+	ListMcpNone:         "未连接 MCP 服务器 — 在 reasonix.toml（[[plugins]]）或项目 .mcp.json 中添加",
+
 	SelectProvidersLabel:  "选择要启用的 provider",
 	EnterAPIKeysHeader:    "输入 API key（回车跳过、稍后写入 .env）：",
 	MissingKeyIntro:       "reasonix.toml 已配置好 — 只差一个 API key 就可以开始。",

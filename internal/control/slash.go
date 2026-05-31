@@ -189,23 +189,23 @@ func (c *Controller) modelListText() string {
 		return "model: " + err.Error()
 	}
 	var b strings.Builder
-	b.WriteString("models (active: " + c.label + ")\n")
+	fmt.Fprintf(&b, i18n.M.ListModelsHeaderFmt+"\n", c.label)
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
 		for _, m := range p.ModelList() {
 			fmt.Fprintf(&b, "  %s/%s\n", p.Name, m)
 		}
 	}
-	b.WriteString("switch with the model switcher, or type /model <provider/model>")
+	b.WriteString(i18n.M.ListModelsHint)
 	return strings.TrimRight(b.String(), "\n")
 }
 
 func (c *Controller) memoryListText() string {
 	if c.mem == nil || len(c.mem.Docs) == 0 {
-		return "memory: none — add with “#<note>” or run /init to generate AGENTS.md"
+		return i18n.M.ListMemoryNone
 	}
 	var b strings.Builder
-	b.WriteString("memory files\n")
+	b.WriteString(i18n.M.ListMemoryHeader + "\n")
 	for _, d := range c.mem.Docs {
 		fmt.Fprintf(&b, "  (%s) %s\n", d.Scope, d.Path)
 	}
@@ -214,10 +214,10 @@ func (c *Controller) memoryListText() string {
 
 func (c *Controller) skillListText() string {
 	if len(c.skills) == 0 {
-		return "skills: none defined — invoke a built-in like /init, or author one with install_skill"
+		return i18n.M.ListSkillsNone
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "skills (%d)\n", len(c.skills))
+	fmt.Fprintf(&b, i18n.M.ListSkillsHeaderFmt+"\n", len(c.skills))
 	for _, s := range c.skills {
 		tag := ""
 		if s.RunAs == "subagent" {
@@ -231,10 +231,10 @@ func (c *Controller) skillListText() string {
 func (c *Controller) hookListText() string {
 	hooks := c.hooks.Hooks()
 	if len(hooks) == 0 {
-		return "hooks: none active — configure in .reasonix/settings.json (project, after trust) or ~/.reasonix/settings.json (global)"
+		return i18n.M.ListHooksNone
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "hooks (%d active)\n", len(hooks))
+	fmt.Fprintf(&b, i18n.M.ListHooksHeaderFmt+"\n", len(hooks))
 	for _, h := range hooks {
 		match := h.Match
 		if match == "" {
@@ -247,10 +247,10 @@ func (c *Controller) hookListText() string {
 
 func (c *Controller) mcpListText() string {
 	if c.host == nil || len(c.host.ServerNames()) == 0 {
-		return "mcp: no servers connected — add one in reasonix.toml ([[plugins]]) or a project .mcp.json"
+		return i18n.M.ListMcpNone
 	}
 	var b strings.Builder
-	b.WriteString("mcp servers\n")
+	b.WriteString(i18n.M.ListMcpHeader + "\n")
 	for _, name := range c.host.ServerNames() {
 		fmt.Fprintf(&b, "  %s\n", name)
 	}

@@ -105,6 +105,18 @@ type Messages struct {
 	ArgHooksTrust   string // /hooks trust
 	ArgModelCurrent string // /model <ref> active tag
 
+	// management listing notices (the Submit path: desktop / HTTP frontends)
+	ListModelsHeaderFmt string // "models (active: %s)"
+	ListModelsHint      string // how to switch
+	ListMemoryHeader    string // "memory files"
+	ListMemoryNone      string // no memory docs
+	ListSkillsHeaderFmt string // "skills (%d)"
+	ListSkillsNone      string // no skills
+	ListHooksHeaderFmt  string // "hooks (%d active)"
+	ListHooksNone       string // no hooks
+	ListMcpHeader       string // "mcp servers"
+	ListMcpNone         string // no mcp servers
+
 	// init wizard
 	SelectProvidersLabel  string // multi-select label
 	EnterAPIKeysHeader    string // header before the per-env-var prompts

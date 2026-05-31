@@ -75,6 +75,17 @@ var English = Messages{
 	ArgHooksTrust:   "trust this project's hooks",
 	ArgModelCurrent: "current",
 
+	ListModelsHeaderFmt: "models (active: %s)",
+	ListModelsHint:      "switch with the model switcher, or type /model <provider/model>",
+	ListMemoryHeader:    "memory files",
+	ListMemoryNone:      "memory: none — add with “#<note>” or run /init to generate AGENTS.md",
+	ListSkillsHeaderFmt: "skills (%d)",
+	ListSkillsNone:      "skills: none defined — invoke a built-in like /init, or author one with install_skill",
+	ListHooksHeaderFmt:  "hooks (%d active)",
+	ListHooksNone:       "hooks: none active — configure in .reasonix/settings.json (project, after trust) or ~/.reasonix/settings.json (global)",
+	ListMcpHeader:       "mcp servers",
+	ListMcpNone:         "mcp: no servers connected — add one in reasonix.toml ([[plugins]]) or a project .mcp.json",
+
 	SelectProvidersLabel:  "Select providers to enable",
 	EnterAPIKeysHeader:    "Enter API keys (Enter to skip and set later in .env):",
 	MissingKeyIntro:       "reasonix.toml is ready — just an API key away.",
