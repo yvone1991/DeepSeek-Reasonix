@@ -104,6 +104,11 @@ enabled = []   # empty = all built-in tools
 #       "PostToolUse": [ { "match": ".*file", "command": "gofmt -w ." } ],
 #       "Stop":        [ { "command": "notify-send 'turn done'" } ] } }
 
+# A custom status line: a command whose first stdout line replaces the built-in
+# data row. It receives {"model","contextUsed","contextWindow"} as JSON on stdin.
+# [statusline]
+# command = "my-statusline.sh"
+
 # External stdio plugins (MCP-compatible); each is a standalone executable.
 # [[plugins]]
 # name    = "example"

@@ -28,6 +28,14 @@ type Config struct {
 	Plugins      []PluginEntry     `toml:"plugins"`
 	Skills       SkillsConfig      `toml:"skills"`
 	Codegraph    CodegraphConfig   `toml:"codegraph"`
+	Statusline   StatuslineConfig  `toml:"statusline"`
+}
+
+// StatuslineConfig configures a custom status line. Command, when set, is run at
+// startup and after each turn; its first line of stdout replaces the built-in
+// status data row. A JSON payload (model, context tokens, cwd) is fed on stdin.
+type StatuslineConfig struct {
+	Command string `toml:"command"`
 }
 
 // CodegraphConfig governs the built-in CodeGraph MCP server — symbol/call-graph

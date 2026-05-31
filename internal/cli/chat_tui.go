@@ -19,6 +19,7 @@ import (
 	"reasonix/internal/command"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
+	"reasonix/internal/hook"
 	"reasonix/internal/i18n"
 	"reasonix/internal/memory"
 	"reasonix/internal/outputstyle"
@@ -144,6 +145,13 @@ type chatTUI struct {
 	// shown as the current entry in the /output-style listing. "" = default.
 	outputStyle string
 
+	// statuslineCmd is the user's custom status-line command (config
+	// [statusline].command); "" disables it. statuslineOut caches its latest
+	// one-line stdout, refreshed at startup and after each turn and rendered in
+	// place of the built-in data row.
+	statuslineCmd string
+	statuslineOut string
+
 	// modelSwitchPending is true while an async /model build is in flight.
 	modelSwitchPending bool
 	// pendingModelSwitch holds the tea.Cmd that triggers the async build.
@@ -181,6 +189,44 @@ type forceRepaintMsg struct{}
 // balanceMsg carries the result of an async wallet-balance fetch; text is the
 // formatted readout ("" when none/failed).
 type balanceMsg struct{ text string }
+
+// statuslineMsg carries the latest custom status-line output (one line, ""
+// when none/failed).
+type statuslineMsg struct{ out string }
+
+// runStatusline runs the user's custom status-line command off the event loop,
+// feeding it a small JSON context on stdin and returning its first stdout line.
+// A no-op (nil) when no command is configured. Tight timeout so a slow script
+// can't stall the UI; failures collapse to an empty line rather than an error.
+func (m chatTUI) runStatusline() tea.Cmd {
+	cmd := m.statuslineCmd
+	if cmd == "" {
+		return nil
+	}
+	used, window := m.ctrl.ContextSnapshot()
+	payload, _ := json.Marshal(map[string]any{
+		"model":         m.label,
+		"contextUsed":   used,
+		"contextWindow": window,
+	})
+	return func() tea.Msg { return statuslineMsg{out: runStatuslineCmd(cmd, string(payload))} }
+}
+
+// runStatuslineCmd runs a status-line command with the JSON context on stdin and
+// returns its first stdout line (status lines are a single row). A tight timeout
+// keeps a slow script from stalling the UI; any failure collapses to "".
+func runStatuslineCmd(cmd, stdinPayload string) string {
+	res := hook.DefaultSpawner(context.Background(), hook.SpawnInput{
+		Command: cmd,
+		Stdin:   stdinPayload + "\n",
+		Timeout: 2 * time.Second,
+	})
+	out := strings.TrimSpace(res.Stdout)
+	if i := strings.IndexByte(out, '\n'); i >= 0 {
+		out = out[:i]
+	}
+	return out
+}
 
 // modelSwitchMsg carries the result of an async /model switch. A nil err means
 // the new controller is ready in ctrl; label/commands/skills/host mirror the
@@ -279,6 +325,7 @@ func (m chatTUI) Init() tea.Cmd {
 		textarea.Blink,
 		waitForAgentEvent(m.eventCh),
 		fetchBalance(m.ctrl),
+		m.runStatusline(), // nil (no-op) unless a custom status line is configured
 	)
 }
 
@@ -491,13 +538,20 @@ func (m chatTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentEventMsg:
 		m.ingestEvent(event.Event(msg))
 		cmds = append(cmds, waitForAgentEvent(m.eventCh))
-		// A turn just spent tokens (and money) — refresh the balance readout.
+		// A turn just spent tokens (and money) — refresh the balance readout and
+		// the custom status line (its context/cost inputs just changed).
 		if event.Event(msg).Kind == event.TurnDone {
 			cmds = append(cmds, fetchBalance(m.ctrl))
+			if c := m.runStatusline(); c != nil {
+				cmds = append(cmds, c)
+			}
 		}
 
 	case balanceMsg:
 		m.balance = msg.text
+
+	case statuslineMsg:
+		m.statuslineOut = msg.out
 
 	case compactDoneMsg:
 		if msg.err != nil {
@@ -816,6 +870,10 @@ func (m chatTUI) View() tea.View {
 		data = append(data, dim(m.balance))
 	}
 	dataLine := "  " + strings.Join(data, " · ")
+	// A configured custom status line replaces the built-in data row entirely.
+	if m.statuslineCmd != "" && m.statuslineOut != "" {
+		dataLine = "  " + m.statuslineOut
+	}
 
 	// The bottom region must stay a stable height: bubbletea's non-alt-screen
 	// renderer commits scrollback via tea.Println by clearing the previous
