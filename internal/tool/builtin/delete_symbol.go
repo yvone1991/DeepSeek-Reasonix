@@ -271,7 +271,7 @@ func collectSymbols(fset *token.FileSet, f *ast.File) []symbolMatch {
 							kind:     kind,
 							start:    ident.Pos(),
 							docStart: docStart,
-							end:      ident.End(),
+							end:      s.End(), // whole spec, incl. a multi-line value — ident.End() stops at the name
 							line:     fset.Position(ident.Pos()).Line,
 							siblings: names,
 						})
