@@ -110,6 +110,7 @@ type Agent struct {
 	prov        provider.Provider
 	tools       *tool.Registry
 	session     *Session
+	sessMu      sync.Mutex // guards the session pointer for external Session()/SetSession
 	maxSteps    int
 	temperature float64
 	pricing     *provider.Pricing
@@ -216,13 +217,25 @@ func (a *Agent) SetAsker(as Asker) { a.asker = as }
 func (a *Agent) SetPreEditHook(fn func(diff.Change)) { a.onPreEdit = fn }
 
 // Session returns the agent's current conversation, useful for persistence
-// hooks that need to read the message log between turns.
-func (a *Agent) Session() *Session { return a.session }
+// hooks that need to read the message log between turns. sessMu serialises this
+// pointer read against SetSession, so a frontend (serve's concurrent /history and
+// /new handlers) can't race the swap. The run loop touches a.session directly and
+// only swaps it via SetSession while idle, so its reads need no lock.
+func (a *Agent) Session() *Session {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	return a.session
+}
 
 // SetSession replaces the agent's conversation wholesale. Used by
 // `reasonix chat --resume` to load a saved JSONL transcript before the first turn,
-// so the model picks up exactly where it left off.
-func (a *Agent) SetSession(s *Session) { a.session = s }
+// so the model picks up exactly where it left off. Callers serialise it against a
+// running turn (it only fires while idle); sessMu guards the pointer swap itself.
+func (a *Agent) SetSession(s *Session) {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	a.session = s
+}
 
 // LastUsage returns the most recent per-turn token telemetry the provider
 // reported (nil if no turn has run yet). The TUI uses it to show a context
