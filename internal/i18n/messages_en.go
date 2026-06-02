@@ -39,7 +39,7 @@ var English = Messages{
 	ChatThinking:           "thinking…",
 	ChatThoughtForFmt:      "thought for %ds",
 	ChatStatusThinkingFmt:  "%s thinking… (%ds · Esc cancels)",
-	ChatStatusIdle:         "Tab toggles plan · Ctrl-O toggles verbose thinking · Enter sends · Esc clears/exits state · PgUp/PgDn scrolls · Ctrl-D quits",
+	ChatStatusIdle:         "Shift-Tab cycles auto/plan/YOLO · Ctrl-O toggles verbose thinking · Enter sends · Esc clears/exits state · PgUp/PgDn scrolls · Ctrl-D quits",
 	ChatStatusPlanApproval: "Enter/y approves & executes · n/Esc keeps planning · PgUp/PgDn scrolls",
 	PlanApprovalPrompt:     "Plan ready above — Enter/y to approve & execute, n/Esc to keep planning",
 	ChatStatusToolApproval: "1 approve once · 2 allow this session · 3 deny · y/a/n also work · Ctrl-C cancels turn",
@@ -51,6 +51,7 @@ var English = Messages{
 	ToolApprovalSourceFmt:  "Source: %s",
 	ToolApprovalBuiltIn:    "built-in tool",
 	ToolApprovalImageUse:   "It will read provided image input for image understanding.",
+	DiffFoldedFmt:          "… +%d more lines",
 
 	OutputStyleNone:   "no output styles available",
 	OutputStyleHeader: "output styles:",

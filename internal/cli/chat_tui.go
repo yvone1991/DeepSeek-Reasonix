@@ -104,6 +104,10 @@ type chatTUI struct {
 	// the block closes. -1 when no block is open. transcriptDirty forces a
 	// viewport re-feed after that in-place rewrite (length is unchanged).
 	reasoningLineIdx int
+	// reasoningTextIdx is the transcript index of the live reasoning text block
+	// (the block right after the marker), streamed in as the model thinks and
+	// removed when the block collapses (kept only in verbose mode). -1 when none.
+	reasoningTextIdx int
 	thinkStart       time.Time
 	// answerIdx is the transcript index of the streaming answer block (rewritten in
 	// place as completed paragraphs arrive); -1 when none is open. answerFlushed is
@@ -358,6 +362,7 @@ func newChatTUI(ctrl *control.Controller, missing string, eventCh chan event.Eve
 		spinner:          sp,
 		nextPasteID:      1,
 		reasoningLineIdx: -1,
+		reasoningTextIdx: -1,
 		answerIdx:        -1,
 		reasoning:        &strings.Builder{},
 		pending:          &strings.Builder{},
@@ -678,10 +683,9 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+o":
 			m.toggleVerboseReasoning(m.state != tuiRunning)
 			return m, finalize(m, cmds)
-		case "tab":
-			if m.state == tuiRunning {
-				break
-			}
+		case "shift+tab":
+			// Cycle auto → plan → YOLO; allowed mid-turn so the user can flip the
+			// gate while a run is in flight (the controller's mode is atomic).
 			m.cycleMode()
 			return m, nil
 		case "enter":
@@ -908,6 +912,15 @@ func (m *chatTUI) commitLine(s string) {
 	m.transcript = append(m.transcript, s)
 }
 
+// commitSpacer separates the next block (a thinking marker or a tool line) from
+// the previous one with a single blank line, skipping it at the top of the
+// transcript or when a blank already trails so spacers never double up.
+func (m *chatTUI) commitSpacer() {
+	if n := len(m.transcript); n > 0 && strings.TrimSpace(m.transcript[n-1]) != "" {
+		m.commitLine("")
+	}
+}
+
 // bottomRows is the terminal-row height of the pinned bottom region: any open
 // panels (todo / approval / chooser / rewind / completion), the input box (its
 // line count plus top+bottom border), and the two fixed status rows.
@@ -924,6 +937,9 @@ func (m chatTUI) bottomRows() int {
 			rows += strings.Count(s, "\n") + 1
 		}
 	}
+	if m.state == tuiRunning {
+		rows++ // the working spinner line above the box
+	}
 	return rows + m.input.Height() + 2 + 2
 }
 
@@ -936,25 +952,57 @@ func (m chatTUI) transcriptHeight() int {
 	return 1
 }
 
+// streamReasoning rewrites the live reasoning text block in place as thinking
+// streams in (mirrors streamAnswer), so the chain of thought is visible while the
+// model works; commitReasoning collapses it when the block closes.
+func (m *chatTUI) streamReasoning() {
+	if m.reasoningTextIdx < 0 {
+		return
+	}
+	m.transcript[m.reasoningTextIdx] = reasoningBlock(m.reasoning.String(), m.width)
+	m.transcriptDirty = true
+}
+
+// reasoningBlock renders raw thinking text as dim, width-wrapped lines indented
+// under the "▎" marker.
+func reasoningBlock(raw string, width int) string {
+	w := width - 4
+	if w < 8 {
+		w = 8
+	}
+	var b strings.Builder
+	for i, ln := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
+		for j, wl := range strings.Split(ansi.Wrap(ln, w, ""), "\n") {
+			if i > 0 || j > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString("    " + dim(wl))
+		}
+	}
+	return b.String()
+}
+
 // commitReasoning closes the live thinking block: the "▎ thinking…" marker is
-// rewritten in place to a dim "▎ thought for Ns" summary, and in verbose mode the
-// accumulated reasoning text is inserted beneath it. The viewport re-wraps from
-// m.transcript, so the in-place rewrite is flagged via transcriptDirty.
+// rewritten to a dim "▎ thought for Ns" summary and the streamed text below it is
+// removed (collapsed) — kept only in verbose mode. The viewport re-wraps from
+// m.transcript, so the change is flagged via transcriptDirty.
 func (m *chatTUI) commitReasoning() {
 	if m.reasoningLineIdx < 0 {
 		return
 	}
 	secs := int(time.Since(m.thinkStart).Seconds())
 	m.transcript[m.reasoningLineIdx] = dim(fmt.Sprintf("  ▎ "+i18n.M.ChatThoughtForFmt, secs))
-	if m.showReasoning && m.reasoning.Len() > 0 {
-		raw := strings.TrimRight(m.reasoning.String(), "\n")
-		at := m.reasoningLineIdx + 1
-		lines := strings.Split(raw, "\n")
-		m.transcript = append(m.transcript[:at], append(lines, m.transcript[at:]...)...)
+	if m.reasoningTextIdx >= 0 {
+		if m.showReasoning && strings.TrimSpace(m.reasoning.String()) != "" {
+			m.transcript[m.reasoningTextIdx] = reasoningBlock(m.reasoning.String(), m.width)
+		} else {
+			m.transcript = append(m.transcript[:m.reasoningTextIdx], m.transcript[m.reasoningTextIdx+1:]...)
+		}
 	}
 	m.transcriptDirty = true
 	m.reasoning.Reset()
 	m.reasoningLineIdx = -1
+	m.reasoningTextIdx = -1
 }
 
 // streamAnswer renders the answer streamed so far up to its last completed
@@ -1126,13 +1174,18 @@ func (m chatTUI) View() tea.View {
 		status = "  " + modeTag + " · " + i18n.M.ChatStatusPlanApproval
 	case m.pendingApproval != nil:
 		status = "  " + modeTag + " · " + i18n.M.ChatStatusToolApproval
-	case m.state == tuiRunning:
-		status = fmt.Sprintf("  %s · "+i18n.M.ChatStatusThinkingFmt, modeTag, m.spinner.View(), m.elapsed)
-		if m.turnTokens > 0 {
-			status += " · ↓" + shortTokens(m.turnTokens)
-		}
 	default:
 		status = "  " + modeTag + " · " + i18n.M.ChatStatusIdle
+	}
+	// The spinning "thinking…" indicator is its own line ABOVE the input box (shown
+	// only while a turn runs); the status/data rows stay below. This mirrors Claude
+	// Code: live progress over the composer, shortcuts + stats under it.
+	var working string
+	if m.state == tuiRunning {
+		working = fmt.Sprintf("  "+i18n.M.ChatStatusThinkingFmt, m.spinner.View(), m.elapsed)
+		if m.turnTokens > 0 {
+			working += " · ↓" + shortTokens(m.turnTokens)
+		}
 	}
 	// Second status row: the live data (context gauge, cache rates, jobs,
 	// balance). It lives on its own fixed row so it's always shown in full rather
@@ -1183,12 +1236,15 @@ func (m chatTUI) View() tea.View {
 		parts = append(parts, menu)
 		rowsAboveBox += strings.Count(menu, "\n") + 1
 	}
-	// Fixed two-row status: line 1 = mode + keybinding/state hints, line 2 = live
-	// data. Each row is clamped to width independently so neither wraps.
+	// Layout: the working spinner (when running) above the box; the input box; then
+	// the two status rows (line 1 = mode + shortcuts/state, line 2 = live data).
+	// Each row is clamped to width independently so neither wraps; padding to full
+	// width keeps a short row from leaving stale cells from the prior frame.
+	if working != "" {
+		parts = append(parts, statusStyle.Width(boxW).MaxWidth(boxW).Render(clampStatusLine(working, boxW)))
+		rowsAboveBox++
+	}
 	statusBlock := clampStatusLine(status, boxW) + "\n" + clampStatusLine(dataLine, boxW)
-	// Pad to the full width so the status rows overwrite the whole line — an
-	// unpadded (short) status leaves stale cells from the prior frame on the
-	// right (alt-screen only writes the cells the frame actually contains).
 	parts = append(parts, box, statusStyle.Width(boxW).MaxWidth(boxW).Render(statusBlock))
 
 	// Full-screen frame: the transcript viewport on top (it pads to exactly its
@@ -1737,8 +1793,8 @@ func pastedFileRef(content string) (string, bool) {
 	return "@" + path, true
 }
 
-// cycleMode advances the input mode normal → plan → YOLO → normal (Tab),
-// mirroring the desktop composer's Shift+Tab. plan is read-only; YOLO
+// cycleMode advances the input mode normal → plan → YOLO → normal (Shift+Tab),
+// mirroring the desktop composer. plan is read-only; YOLO
 // auto-approves every tool call for the session (deny rules still apply). The
 // status line's mode tag ([auto]/[plan]/[YOLO]) reflects the result.
 func (m *chatTUI) cycleMode() {
@@ -1857,15 +1913,18 @@ func (m *chatTUI) ingestEvent(e event.Event) {
 	switch e.Kind {
 	case event.Reasoning:
 		if m.reasoningLineIdx < 0 {
-			// Show the marker the moment thinking starts so the user sees the model
-			// working; it's rewritten to "thought for Ns" when the block closes.
+			// Show the marker plus a live text block the moment thinking starts; the
+			// text streams in below it and the block collapses to "thought for Ns"
+			// when it closes (kept expanded only in verbose mode).
+			m.commitSpacer()
 			m.thinkStart = time.Now()
 			m.reasoningLineIdx = len(m.transcript)
 			m.commitLine(dim("  ▎ " + i18n.M.ChatThinking))
+			m.reasoningTextIdx = len(m.transcript)
+			m.commitLine("")
 		}
-		if m.showReasoning {
-			m.reasoning.WriteString(dim(e.Text))
-		}
+		m.reasoning.WriteString(e.Text)
+		m.streamReasoning()
 
 	case event.Text:
 		m.commitReasoning() // reasoning ends as the answer begins
@@ -1892,15 +1951,22 @@ func (m *chatTUI) ingestEvent(e event.Event) {
 		case planApprovalTool:
 			// No longer a tool, but guard anyway: the plan is the assistant's reply.
 		default:
-			m.commitLine(fmt.Sprintf("  -> %s %s", e.Tool.Name, compactArgs(e.Tool.Args)))
+			m.commitSpacer()
+			if block := diffBlock(e.Tool.Name, e.Tool.Args, e.Tool.FileDiff, m.width, diffScrollbackMaxLines); block != nil {
+				for _, ln := range block {
+					m.commitLine(ln)
+				}
+				break
+			}
+			m.commitLine(toolCard(e.Tool.Name, e.Tool.Args, m.width))
 		}
 
 	case event.ToolResult:
-		// A successful result is silent (it only feeds the model); a blocked call
-		// surfaces a "⊘ name <reason>" line.
+		// A successful result is silent (it only feeds the model); a blocked/failed
+		// call surfaces a red "⏺ Verb ⊘ <reason>" card.
 		if e.Tool.Err != "" {
 			m.finalizeStreamed()
-			m.commitLine(fmt.Sprintf("  ⊘ %s %s", e.Tool.Name, e.Tool.Err))
+			m.commitLine("  " + red("●") + " " + bold(toolDisplayName(e.Tool.Name)) + " " + red("⊘ "+e.Tool.Err))
 		}
 
 	case event.Usage:
@@ -2298,7 +2364,3 @@ type eventSink struct {
 }
 
 func (s *eventSink) Emit(e event.Event) { s.ch <- e }
-
-// compactArgs delegates to agent.CompactArgs so the CLI and headless rendering
-// stay identical.
-func compactArgs(s string) string { return agent.CompactArgs(s) }

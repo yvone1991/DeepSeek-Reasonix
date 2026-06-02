@@ -507,12 +507,13 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 func (a *Agent) executeBatch(ctx context.Context, calls []provider.ToolCall) []string {
 	for _, c := range calls {
 		t, ok := a.tools.Get(c.Name)
-		a.sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: event.Tool{
-			ID:       c.ID,
-			Name:     c.Name,
-			Args:     c.Arguments,
-			ReadOnly: ok && t.ReadOnly(),
-		}})
+		ev := event.Tool{ID: c.ID, Name: c.Name, Args: c.Arguments, ReadOnly: ok && t.ReadOnly()}
+		if ok {
+			if ch, ok := tool.PreviewChange(t, json.RawMessage(c.Arguments)); ok {
+				ev.FileDiff = event.FileDiff{Diff: ch.Diff, Added: ch.Added, Removed: ch.Removed}
+			}
+		}
+		a.sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: ev})
 	}
 
 	results := make([]string, len(calls))

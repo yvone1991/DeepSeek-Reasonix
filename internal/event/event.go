@@ -92,6 +92,17 @@ type Tool struct {
 	// sub-agent's calls carry the parent `task` call's ID so a frontend can nest
 	// them under it. Empty for top-level calls.
 	ParentID string
+	FileDiff
+}
+
+// FileDiff is a previewed change carried on a writer tool's full ToolDispatch
+// and on its ApprovalRequest, so a frontend can render +/- lines before the
+// call runs. Diff is the unified diff (empty for read-only tools, binary files,
+// or no-op changes); Added/Removed are its line tallies.
+type FileDiff struct {
+	Diff    string
+	Added   int
+	Removed int
 }
 
 // Approval identifies a pending tool-call approval for an ApprovalRequest

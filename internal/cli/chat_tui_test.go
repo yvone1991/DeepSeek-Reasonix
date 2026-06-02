@@ -55,18 +55,18 @@ func TestTranscriptViewportSizing(t *testing.T) {
 }
 
 // TestIngestEventRoutesByKind proves each event Kind lands in the right place:
-// reasoning shows a collapsed live marker at once, while tool dispatch, blocked
+// reasoning shows a live marker with streaming text, while tool dispatch, blocked
 // results, usage, notices, and coordinator phases each commit as their own
 // scrollback line. Routing is by Kind, not by sniffing line prefixes.
 func TestIngestEventRoutesByKind(t *testing.T) {
-	// Reasoning shows a collapsed live marker at once, without the raw thinking.
+	// Reasoning shows a marker plus the live thinking text streamed below it.
 	m := newTestChatTUI()
 	m.ingestEvent(event.Event{Kind: event.Reasoning, Text: "weighing options"})
-	if len(m.transcript) != 1 || !strings.Contains(m.transcript[0], "thinking") {
+	if len(m.transcript) != 2 || !strings.Contains(m.transcript[0], "thinking") {
 		t.Errorf("reasoning should show a live marker, transcript=%v", m.transcript)
 	}
-	if strings.Contains(m.transcript[0], "weighing options") {
-		t.Errorf("reasoning text should stay hidden by default, transcript=%v", m.transcript)
+	if !strings.Contains(m.transcript[1], "weighing options") {
+		t.Errorf("reasoning text should stream live, transcript=%v", m.transcript)
 	}
 
 	for _, tc := range []struct {
@@ -74,8 +74,8 @@ func TestIngestEventRoutesByKind(t *testing.T) {
 		ev   event.Event
 		want string
 	}{
-		{"dispatch", event.Event{Kind: event.ToolDispatch, Tool: event.Tool{Name: "read_file", Args: `{"path":"x"}`}}, "  -> read_file {\"path\":\"x\"}"},
-		{"blocked", event.Event{Kind: event.ToolResult, Tool: event.Tool{Name: "bash", Err: "blocked by permission policy"}}, "  ⊘ bash blocked by permission policy"},
+		{"dispatch", event.Event{Kind: event.ToolDispatch, Tool: event.Tool{Name: "read_file", Args: `{"path":"x"}`}}, "● Read(x)"},
+		{"blocked", event.Event{Kind: event.ToolResult, Tool: event.Tool{Name: "bash", Err: "blocked by permission policy"}}, "● Bash ⊘ blocked by permission policy"},
 		{"usage", event.Event{Kind: event.Usage, Usage: &provider.Usage{PromptTokens: 1000, CompletionTokens: 200, TotalTokens: 1200, CacheHitTokens: 900, CacheMissTokens: 100}}, "  · 1200 tok"},
 		{"notice-info", event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: "compacted 8 messages → summary"}, "  · compacted 8 messages → summary"},
 		{"notice-warn", event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "response truncated: hit max output tokens"}, "  ! response truncated: hit max output tokens"},

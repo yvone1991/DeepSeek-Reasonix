@@ -73,6 +73,7 @@ type Messages struct {
 	ToolApprovalSourceFmt  string // "Source: %s" / "来源: %s"
 	ToolApprovalBuiltIn    string // built-in tool source label
 	ToolApprovalImageUse   string // image-understanding detail for understand_image-style tools
+	DiffFoldedFmt          string // "… +%d more lines" footer when a writer diff is folded
 
 	// `ask` tool question card.
 	AskTypeSomething   string // the "type your own answer" option label

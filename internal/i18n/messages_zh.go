@@ -40,7 +40,7 @@ var Chinese = Messages{
 	ChatThinking:           "思考中…",
 	ChatThoughtForFmt:      "思考了 %d 秒",
 	ChatStatusThinkingFmt:  "%s 思考中… (%d 秒 · Esc 取消)",
-	ChatStatusIdle:         "Tab 切换 plan · Ctrl-O 切换 verbose thinking · Enter 发送 · Esc 退出当前状态 · PgUp/PgDn 滚动 · Ctrl-D 退出",
+	ChatStatusIdle:         "Shift-Tab 切换 auto/plan/YOLO · Ctrl-O 切换 verbose thinking · Enter 发送 · Esc 退出当前状态 · PgUp/PgDn 滚动 · Ctrl-D 退出",
 	ChatStatusPlanApproval: "Enter/y 批准并执行 · n/Esc 继续规划 · PgUp/PgDn 滚动",
 	PlanApprovalPrompt:     "计划已生成（见上方）— Enter/y 批准执行,n/Esc 继续规划",
 	ChatStatusToolApproval: "1 本次允许 · 2 本会话允许 · 3 拒绝 · y/a/n 兼容 · Ctrl-C 取消本轮",
@@ -52,6 +52,7 @@ var Chinese = Messages{
 	ToolApprovalSourceFmt:  "来源: %s",
 	ToolApprovalBuiltIn:    "内置工具",
 	ToolApprovalImageUse:   "将读取提供的图片用于图像理解。",
+	DiffFoldedFmt:          "… 还有 %d 行",
 
 	OutputStyleNone:   "没有可用的输出风格",
 	OutputStyleHeader: "输出风格：",

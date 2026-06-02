@@ -17,8 +17,10 @@ func newTestChatTUI() chatTUI {
 	ti.SetWidth(80)
 	return chatTUI{
 		input:            ti,
+		width:            80,
 		nextPasteID:      1,
 		reasoningLineIdx: -1,
+		reasoningTextIdx: -1,
 		answerIdx:        -1,
 		reasoning:        &strings.Builder{},
 		pending:          &strings.Builder{},
@@ -27,23 +29,27 @@ func newTestChatTUI() chatTUI {
 	}
 }
 
-// TestIngestSeparatesReasoningFromAnswer proves the thinking marker appears the
-// moment reasoning starts, collapses in place to a "thought for Ns" summary when
-// the answer begins, and the answer commits as its own distinct entry.
+// TestIngestSeparatesReasoningFromAnswer proves the thinking marker plus its live
+// text appear as reasoning streams, collapse to a "thought for Ns" summary (the
+// streamed text removed) when the answer begins, and the answer commits as its
+// own distinct entry.
 func TestIngestSeparatesReasoningFromAnswer(t *testing.T) {
 	m := newTestChatTUI()
 
-	m.ingestEvent(event.Event{Kind: event.Reasoning, Text: "…reasoning…"}) // thinking starts → live marker
-	if len(m.transcript) != 1 || !strings.Contains(m.transcript[0], "thinking") {
+	m.ingestEvent(event.Event{Kind: event.Reasoning, Text: "…reasoning…"}) // thinking → marker + live text
+	if len(m.transcript) != 2 || !strings.Contains(m.transcript[0], "thinking") {
 		t.Fatalf("thinking marker should appear at once, transcript=%v", m.transcript)
 	}
-	if strings.Contains(m.transcript[0], "…reasoning…") {
-		t.Fatalf("raw reasoning text should stay collapsed by default, transcript=%v", m.transcript)
+	if !strings.Contains(m.transcript[1], "…reasoning…") {
+		t.Fatalf("reasoning text should stream live below the marker, transcript=%v", m.transcript)
 	}
 
-	m.ingestEvent(event.Event{Kind: event.Text, Text: "Hello answer"}) // answer begins → marker collapses
+	m.ingestEvent(event.Event{Kind: event.Text, Text: "Hello answer"}) // answer begins → block collapses
 	if len(m.transcript) != 1 || !strings.Contains(m.transcript[0], "thought for") {
-		t.Fatalf("marker should collapse to a duration summary in place, transcript=%v", m.transcript)
+		t.Fatalf("block should collapse to a duration summary, transcript=%v", m.transcript)
+	}
+	if strings.Contains(strings.Join(m.transcript, "\n"), "…reasoning…") {
+		t.Fatalf("collapsed reasoning text should be removed, transcript=%v", m.transcript)
 	}
 	if m.pending.String() != "Hello answer" {
 		t.Errorf("answer should be live in pending, got %q", m.pending.String())
@@ -85,14 +91,18 @@ func TestIngestEventFlushesAnswer(t *testing.T) {
 	m := newTestChatTUI()
 	m.ingestEvent(event.Event{Kind: event.Text, Text: "partial answer "})
 	m.ingestEvent(event.Event{Kind: event.ToolDispatch, Tool: event.Tool{Name: "read_file", Args: `{"path":"x"}`}})
-	if n := len(*m.pendingCommit); n != 2 {
-		t.Fatalf("answer then event line should be two commits, got %d: %v", n, *m.pendingCommit)
+	// answer, then a blank spacer, then the tool line.
+	if n := len(*m.pendingCommit); n != 3 {
+		t.Fatalf("answer + spacer + event line should be three commits, got %d: %v", n, *m.pendingCommit)
 	}
 	if !strings.Contains((*m.pendingCommit)[0], "partial answer") {
 		t.Errorf("first commit should be the buffered answer, got %q", (*m.pendingCommit)[0])
 	}
-	if !strings.Contains((*m.pendingCommit)[1], "-> read_file") {
-		t.Errorf("second commit should be the event line, got %q", (*m.pendingCommit)[1])
+	if strings.TrimSpace((*m.pendingCommit)[1]) != "" {
+		t.Errorf("second commit should be a blank spacer, got %q", (*m.pendingCommit)[1])
+	}
+	if !strings.Contains((*m.pendingCommit)[2], "Read(x)") {
+		t.Errorf("third commit should be the tool card, got %q", (*m.pendingCommit)[2])
 	}
 	if m.pending.Len() != 0 {
 		t.Errorf("answer buffer should be drained after the event line")
