@@ -12,11 +12,16 @@ import (
 	"os"
 	"strings"
 
+	"golang.org/x/text/transform"
+
 	fileenc "reasonix/internal/fileutil/encoding"
 	"reasonix/internal/tool"
 )
 
-const readFileBinaryPeek = 8 * 1024 // bytes scanned for NUL before full read
+const (
+	readFileBinaryPeek   = 8 * 1024   // bytes scanned for NUL before reading further
+	readFileDetectSample = 256 * 1024 // bytes sampled for encoding detection before streaming
+)
 
 func init() { tool.RegisterBuiltin(readFile{}) }
 
@@ -82,44 +87,65 @@ func (r readFile) Execute(ctx context.Context, args json.RawMessage) (string, er
 	}
 	defer f.Close()
 
-	// Peek the first 8 KiB to reject binary files cheaply — the original
-	// implementation did this too, and it prevents a multi-GB archive or
-	// executable from being slurped into memory just to be discarded.
+	// Peek the first 8 KiB to reject binary files cheaply (a NUL byte) before
+	// reading further — keeps a multi-GB archive from being slurped just to be
+	// discarded.
 	peek := make([]byte, readFileBinaryPeek)
-	n, _ := io.ReadFull(f, peek)
-	peek = peek[:n]
+	pn, perr := io.ReadFull(f, peek)
+	peek = peek[:pn]
+	peekEOF := perr != nil // whole file fit in the peek (EOF / ErrUnexpectedEOF)
 
-	// Check for a BOM first: UTF-16 files contain 0x00 for every ASCII
-	// character, so a naive NUL check would misidentify them as binary.
-	bomKind := fileenc.DetectQuick(peek)
-	if bomKind == fileenc.UTF16LE || bomKind == fileenc.UTF16BE || bomKind == fileenc.UTF8BOM {
-		rest, err := io.ReadAll(f)
-		if err != nil {
-			return "", fmt.Errorf("read %s: %w", p.Path, err)
+	// BOM check first: UTF-16 files contain 0x00 for every ASCII character, so a
+	// naive NUL check would misidentify them as binary.
+	switch fileenc.DetectQuick(peek) {
+	case fileenc.UTF16LE, fileenc.UTF16BE:
+		// UTF-16 is not self-synchronising and can't be streamed line-by-line, so
+		// buffer it fully (these files are rare and usually small).
+		rest, rerr := io.ReadAll(f)
+		if rerr != nil {
+			return "", fmt.Errorf("read %s: %w", p.Path, rerr)
 		}
 		all := append(peek, rest...)
-		src := io.Reader(bytes.NewReader(fileenc.Decode(all, bomKind)))
-		return r.scan(src, p.Offset, p.Limit)
+		bom := fileenc.DetectQuick(all)
+		return r.scan(bytes.NewReader(fileenc.Decode(all, bom)), p.Offset, p.Limit)
+	case fileenc.UTF8BOM:
+		// Strip the 3-byte BOM; the content is valid UTF-8 and streams directly.
+		body := peek
+		if len(body) >= 3 {
+			body = body[3:]
+		}
+		return r.scan(io.MultiReader(bytes.NewReader(body), f), p.Offset, p.Limit)
 	}
 
-	// No BOM — a NUL anywhere in the peek means binary.
 	if bytes.IndexByte(peek, 0) >= 0 {
 		return "", fmt.Errorf("binary file %s (NUL byte detected); use `bash hexdump` or another tool", p.Path)
 	}
 
-	// Non-BOM text: read the rest for full encoding detection (UTF-8 vs
-	// GB18030 vs lossy fallback). The peek already passed the NUL check
-	// so the remainder is unlikely to contain one, but check anyway.
-	rest, err := io.ReadAll(f)
-	if err != nil {
-		return "", fmt.Errorf("read %s: %w", p.Path, err)
+	// Read up to a bounded sample for encoding detection, then stream the rest —
+	// so a large text file isn't slurped whole just to return a few lines.
+	head := peek
+	if !peekEOF {
+		more := make([]byte, readFileDetectSample-len(peek))
+		mn, merr := io.ReadFull(f, more)
+		head = append(peek, more[:mn]...)
+		peekEOF = merr != nil
 	}
-	all := append(peek, rest...)
-	enc, _ := fileenc.Detect(all)
-	if enc == fileenc.LossyUTF8 && bytes.IndexByte(all, 0) >= 0 {
-		return "", fmt.Errorf("binary file %s (NUL byte detected); use `bash hexdump` or another tool", p.Path)
+
+	// Detect from a char-safe slice: when more file follows, trim to the last
+	// newline so the sample never ends mid multi-byte sequence (UTF-8 and GB18030
+	// are ASCII-transparent, so '\n' is always a clean boundary).
+	sample := head
+	if !peekEOF {
+		if i := bytes.LastIndexByte(head, '\n'); i >= 0 {
+			sample = head[:i+1]
+		}
 	}
-	src := io.Reader(bytes.NewReader(fileenc.Decode(all, enc)))
+	enc, _ := fileenc.Detect(sample)
+
+	src := io.MultiReader(bytes.NewReader(head), f)
+	if dec := fileenc.Decoder(enc); dec != nil {
+		return r.scan(transform.NewReader(src, dec), p.Offset, p.Limit)
+	}
 	return r.scan(src, p.Offset, p.Limit)
 }
 
