@@ -241,6 +241,16 @@ export interface SessionMeta {
   topicTitle?: string;
 }
 
+// SessionReference is a session selected via @ past:chats for context injection.
+export interface SessionReference {
+  path: string;
+  title: string;
+  preview?: string;
+  turns?: number;
+  createdAt?: number;
+  lastActivityAt?: number;
+}
+
 export interface WorkspaceView {
   path: string;
   name: string;

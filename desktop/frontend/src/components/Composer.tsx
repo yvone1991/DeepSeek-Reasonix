@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ClipboardEvent, DragEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
-import { AlertTriangle, ArrowUp, Check, ChevronDown, Eye, FileText, Folder, FolderGit2, FolderPlus, List, Search, Square, Trash2, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowUp, Check, ChevronDown, Eye, FileText, Folder, FolderGit2, FolderPlus, List, MessageSquare, Search, Square, Trash2, X, Zap } from "lucide-react";
 import { asArray } from "../lib/array";
 import { app, onFilesDropped } from "../lib/bridge";
 import { SPINNER_WORDS, useI18n } from "../lib/i18n";
 import { clearLayoutSize, loadOptionalLayoutSize, saveLayoutSize } from "../lib/layoutPreferences";
-import type { CommandInfo, ComposerInsertRequest, DirEntry, EffortInfo, Mode, SlashArgItem, SlashArgsResult, WorkspaceView } from "../lib/types";
+import type { CommandInfo, ComposerInsertRequest, DirEntry, EffortInfo, HistoryMessage, Mode, SessionMeta, SessionReference, SlashArgItem, SlashArgsResult, WorkspaceView } from "../lib/types";
 import {
   formatWorkspaceReference,
   parseWorkspaceReference,
@@ -100,6 +100,34 @@ function fmtElapsed(ms: number): string {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
+// --- past:chats hover preview helpers (PR-C2) ---
+// Pure formatting helpers used by the past:chats list tooltip. They never read
+// from disk, never call PreviewSession — they only shape the data that already
+// lives in the SessionMeta snapshot we fetched on entry.
+const PAST_CHAT_PREVIEW_MAX = 200;
+
+function truncatePreview(value?: string, max = PAST_CHAT_PREVIEW_MAX): string {
+  const text = (value || "").trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}...`;
+}
+
+function fmtSessionTime(value?: number): string {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+function pastChatTitle(session: SessionMeta): string {
+  return session.title || session.topicTitle || session.preview || "Untitled";
+}
+
 function useTick(on: boolean): number {
   const [, setN] = useState(0);
   useEffect(() => {
@@ -125,6 +153,90 @@ function isImeKeyEvent(
     native.keyCode === 229 ||
     Date.now() - lastCompositionEndAt < IME_CONFIRM_GRACE_MS
   );
+}
+
+// --- past:chats session reference → prompt context (PR-B) ---
+// Send-side helpers for "@past:chats" session references. PR-A wired the menu and
+// the composer-context card; this layer reads each referenced session through the
+// existing PreviewSession API and prepends a compact "user / 助手" transcript to
+// submitText so the model sees the referenced chat as background context.
+const SESSION_REF_MAX_MESSAGES = 30;
+const SESSION_REF_MAX_CHARS = 20_000;
+const SESSION_CONTEXT_HEADER = "以下是用户引用的历史会话上下文：";
+const SESSION_CONTEXT_FOOTER = "当前用户问题：";
+
+// limitSessionMessages keeps the most recent useful messages within a char budget.
+// Walks from the end so the truncation is always "drop the oldest", which matches
+// the intuition that the latest turns are the relevant ones for follow-up.
+function limitSessionMessages(
+  messages: HistoryMessage[],
+  maxMessages = SESSION_REF_MAX_MESSAGES,
+  maxChars = SESSION_REF_MAX_CHARS,
+): { messages: HistoryMessage[]; truncated: boolean } {
+  const useful = messages
+    .filter(
+      (m) =>
+        (m.role === "user" || m.role === "assistant") &&
+        typeof m.content === "string" &&
+        m.content.trim().length > 0,
+    )
+    .slice(-maxMessages);
+  const result: HistoryMessage[] = [];
+  let total = 0;
+  let truncated = useful.length >= maxMessages;
+  for (let i = useful.length - 1; i >= 0; i--) {
+    const msg = useful[i];
+    const content = msg.content.trim();
+    if (total + content.length > maxChars) {
+      truncated = true;
+      break;
+    }
+    result.unshift({ ...msg, content });
+    total += content.length;
+  }
+  if (result.length < useful.length) truncated = true;
+  return { messages: result, truncated };
+}
+
+// formatSessionContext renders one referenced session as a labelled transcript.
+// Falls back to a "no usable messages" note when filtering empties the list so
+// the model still sees that something was referenced.
+function formatSessionContext(
+  ref: SessionReference,
+  messages: HistoryMessage[],
+  truncated: boolean,
+): string {
+  const body = messages
+    .map((m) => `${m.role === "user" ? "用户" : "助手"}：${m.content.trim()}`)
+    .join("\n\n");
+  return [
+    `[会话：${ref.title}]`,
+    truncated ? "注意：该会话内容较长，以下只包含最近部分内容。" : "",
+    body || "注意：该会话没有可引用的用户/助手消息。",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+// buildSessionContext reads each referenced session, formats the most recent
+// slice, and joins them with a separator. A single failed read must not block
+// the others; the user gets a clear "读取失败" note for the bad one and the
+// remaining refs still flow through.
+async function buildSessionContext(refs: SessionReference[]): Promise<string> {
+  if (refs.length === 0) return "";
+  let context = `${SESSION_CONTEXT_HEADER}\n\n`;
+  for (const ref of refs) {
+    try {
+      const raw = await app.PreviewSession(ref.path);
+      const limited = limitSessionMessages(asArray(raw));
+      context += `${formatSessionContext(ref, limited.messages, limited.truncated)}\n\n---\n\n`;
+    } catch (error) {
+      console.error("[past:chats] failed to preview session", ref.path, error);
+      context += `[会话：${ref.title}]\n注意：该会话读取失败，已跳过。\n\n---\n\n`;
+    }
+  }
+  context += `${SESSION_CONTEXT_FOOTER}\n`;
+  return context;
 }
 
 export function Composer({
@@ -206,6 +318,11 @@ export function Composer({
   const [composerResizing, setComposerResizing] = useState(false);
   const [textareaAutoHeight, setTextareaAutoHeight] = useState<number | null>(null);
   const [textareaAutoOverflow, setTextareaAutoOverflow] = useState(false);
+  const [showPastChats, setShowPastChats] = useState(false);
+  const [pastChats, setPastChats] = useState<SessionMeta[]>([]);
+  const [pastChatQuery, setPastChatQuery] = useState("");
+  const [sessionRefs, setSessionRefs] = useState<SessionReference[]>([]);
+  const [loadingPastChats, setLoadingPastChats] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const composerCardRef = useRef<HTMLDivElement>(null);
   const workspaceAnchorRef = useRef<HTMLDivElement>(null);
@@ -455,7 +572,7 @@ export function Composer({
     return expanded;
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (disabled) return;
     const t = text.trim();
     if ((!t && attachments.length === 0 && workspaceRefs.length === 0) || pendingPaste > 0) return;
@@ -464,11 +581,18 @@ export function Composer({
       ...attachments.map((a) => `@${a.path}`),
     ].join(" ");
     const displayText = [t, refs].filter(Boolean).join(t && refs ? " " : "");
-    const submitText = [expandPastedBlocks(t), refs].filter(Boolean).join(t && refs ? " " : "");
+    // PR-B: when past:chats refs are attached, prepend their formatted transcript
+    // to submitText only (displayText stays unchanged so the user still sees their
+    // original prompt in the input preview). With no refs we keep the original
+    // submitText verbatim — no header, no rewording, byte-identical to pre-PR-B.
+    const sessionContext = sessionRefs.length === 0 ? "" : await buildSessionContext(sessionRefs);
+    const baseSubmitText = [expandPastedBlocks(t), refs].filter(Boolean).join(t && refs ? " " : "");
+    const submitText = sessionContext ? `${sessionContext}${baseSubmitText}` : baseSubmitText;
     onSend(displayText, submitText);
     setText("");
     setAttachments([]);
     setWorkspaceRefs([]);
+    setSessionRefs([]);
   };
 
   const readFileAsDataURL = (file: File) =>
@@ -838,6 +962,78 @@ export function Composer({
     setTextCaretEnd(prefix + "@" + atDir + e.name + (e.isDir ? "/" : " "));
   };
 
+  // --- past:chats session reference ---
+  const openPastChats = async () => {
+    setShowPastChats(true);
+    setLoadingPastChats(true);
+    try {
+      const sessions = await app.ListSessions();
+      const sorted = asArray(sessions)
+        .filter((s) => !s.current)
+        .sort((a, b) => {
+          const at = a.lastActivityAt || a.modTime || a.createdAt || 0;
+          const bt = b.lastActivityAt || b.modTime || b.createdAt || 0;
+          return bt - at;
+        })
+        .slice(0, 50);
+      setPastChats(sorted);
+    } catch {
+      setPastChats([]);
+    } finally {
+      setLoadingPastChats(false);
+    }
+  };
+
+  // PR-C1: client-side filter for the past:chats list. Matches against the
+  // human-visible fields (title, topic, preview, path, workspace) so users
+  // can narrow long session lists without a backend round-trip. Lowercased
+  // substring match keeps the behaviour predictable across locales.
+  const filteredPastChats = useMemo(() => {
+    const q = pastChatQuery.trim().toLowerCase();
+    if (!q) return pastChats;
+    return pastChats.filter((session) =>
+      [
+        session.title,
+        session.topicTitle,
+        session.preview,
+        session.path,
+        session.workspaceRoot,
+      ]
+        .map((value) => String(value ?? "").toLowerCase())
+        .some((value) => value.includes(q)),
+    );
+  }, [pastChats, pastChatQuery]);
+
+  const removeAtToken = (value: string) => {
+    return value.replace(/(?:^|\s)@[^\s]*$/, "").trimEnd();
+  };
+
+  const pickSession = (session: SessionMeta) => {
+    setSessionRefs((prev) => {
+      if (prev.some((x) => x.path === session.path)) {
+        return prev;
+      }
+      return [
+        ...prev,
+        {
+          path: session.path,
+          title: session.title || session.topicTitle || session.preview || "Untitled",
+          preview: session.preview,
+          turns: session.turns,
+          createdAt: session.createdAt,
+          lastActivityAt: session.lastActivityAt,
+        },
+      ];
+    });
+    setText((prev) => removeAtToken(prev));
+    setPastChatQuery("");
+    setShowPastChats(false);
+  };
+
+  const removeSessionRef = (path: string) => {
+    setSessionRefs((prev) => prev.filter((ref) => ref.path !== path));
+  };
+
   // pickArg replaces just the current token with the suggestion. A "descend" item
   // (e.g. "/skill show ") ends with a space, so the effect re-fetches the next
   // level; a terminal item leaves the menu (next fetch returns nothing).
@@ -1012,7 +1208,114 @@ export function Composer({
       {menuMode === "slasharg" && argRes && (
         <ArgMenu items={argRes.items} activeIndex={active} onPick={pickArg} onHover={setActive} />
       )}
-      {menuMode === "at" && <FileMenu items={atMatches} activeIndex={active} onPick={pickEntry} onHover={setActive} />}
+      {menuMode === "at" && (
+        showPastChats ? (
+          <div className="slashmenu" role="listbox">
+            {loadingPastChats ? (
+              <div className="slashmenu__item slashmenu__item--empty">
+                <span className="slashmenu__name">正在加载历史会话...</span>
+              </div>
+            ) : pastChats.length === 0 ? (
+              <div className="slashmenu__item slashmenu__item--empty">
+                <span className="slashmenu__name">暂无历史会话</span>
+              </div>
+            ) : (
+              <>
+                {/* PR-C1: search input is only meaningful when there are sessions
+                    to filter; rendering it in the other states would be noise. */}
+                <div className="slashmenu__item slashmenu__item--search" onMouseDown={(ev) => ev.preventDefault()}>
+                  <Search size={13} className="filemenu__icon" />
+                  <input
+                    className="slashmenu__search"
+                    type="text"
+                    placeholder="搜索历史会话…"
+                    value={pastChatQuery}
+                    autoFocus
+                    onChange={(ev) => {
+                      setPastChatQuery(ev.target.value);
+                      setActive(0);
+                    }}
+                    onKeyDown={(ev) => ev.stopPropagation()}
+                  />
+                </div>
+                {filteredPastChats.length === 0 ? (
+                  <div className="slashmenu__item slashmenu__item--empty">
+                    <span className="slashmenu__name">没有匹配的历史会话</span>
+                  </div>
+                ) : (
+                  filteredPastChats.map((session, i) => {
+                    // PR-C2: hover preview uses only the SessionMeta fields we
+                    // already have on hand — no extra PreviewSession call, no
+                    // backend round-trip, no read of the full transcript.
+                    const turns = typeof session.turns === "number";
+                    const ts = session.lastActivityAt || session.modTime || session.createdAt;
+                    const preview = truncatePreview(session.preview);
+                    const pathText = session.workspaceRoot || session.path;
+                    const tooltipLabel =
+                      turns || ts || preview || pathText ? (
+                        <div className="past-chat-hover">
+                          <div className="past-chat-hover__title">{pastChatTitle(session)}</div>
+                          {preview && <div className="past-chat-hover__preview">{preview}</div>}
+                          {(turns || ts) && (
+                            <div className="past-chat-hover__meta">
+                              {turns && <span>{session.turns} 轮</span>}
+                              {ts && <span>· {fmtSessionTime(ts)}</span>}
+                            </div>
+                          )}
+                          {pathText && <div className="past-chat-hover__path">{pathText}</div>}
+                        </div>
+                      ) : null;
+                    return (
+                      <Tooltip key={session.path} block label={tooltipLabel}>
+                        <button
+                          className={`slashmenu__item ${i === active ? "slashmenu__item--active" : ""}`}
+                          onMouseDown={(ev) => {
+                            ev.preventDefault();
+                            pickSession(session);
+                          }}
+                          onMouseMove={() => setActive(i)}
+                        >
+                          <MessageSquare size={13} className="filemenu__icon" />
+                          <span className="slashmenu__name slashmenu__name--file">
+                            {pastChatTitle(session)}
+                            {turns ? ` (${session.turns} 轮)` : ""}
+                          </span>
+                        </button>
+                      </Tooltip>
+                    );
+                  })
+                )}
+              </>
+            )}
+            <button
+              className="slashmenu__item slashmenu__item--back"
+              onMouseDown={(ev) => {
+                ev.preventDefault();
+                setPastChatQuery("");
+                setShowPastChats(false);
+                setActive(0);
+              }}
+            >
+              <span className="slashmenu__name">← 返回文件列表</span>
+            </button>
+          </div>
+        ) : (
+          <div className="slashmenu" role="listbox">
+            <button
+              className="slashmenu__item slashmenu__item--special"
+              onMouseDown={(ev) => {
+                ev.preventDefault();
+                openPastChats();
+              }}
+            >
+              <MessageSquare size={13} className="filemenu__icon" />
+              <span className="slashmenu__name">past:chats</span>
+              <span className="slashmenu__desc">引用历史会话</span>
+            </button>
+            <FileMenu items={atMatches} activeIndex={active} onPick={pickEntry} onHover={setActive} />
+          </div>
+        )
+      )}
       <div className="composer-toolbar">
         <div className="composer-modebar" role="toolbar" aria-label={t("composer.modeTitle")}>
           {modeOptions.map((option) => (
@@ -1042,7 +1345,7 @@ export function Composer({
           </div>
         )}
       </div>
-      {(attachments.length > 0 || workspaceRefs.length > 0) && (
+      {(attachments.length > 0 || workspaceRefs.length > 0 || sessionRefs.length > 0) && (
         <div className="composer-context" aria-label={t("composer.contextItems")}>
           {attachments.map((a) => (
             <div
@@ -1080,6 +1383,30 @@ export function Composer({
                 <button
                   type="button"
                   onClick={() => removeWorkspaceReference(ref)}
+                >
+                  <X size={13} />
+                </button>
+              </Tooltip>
+            </div>
+          ))}
+          {sessionRefs.map((ref) => (
+            <div
+              className="composer-context__item composer-context__item--session"
+              key={ref.path}
+            >
+              <Tooltip label={ref.preview || ref.title}>
+                <span className="composer-context__label">
+                  <MessageSquare size={15} />
+                  <span>
+                    {ref.title}
+                    {typeof ref.turns === "number" ? ` (${ref.turns} 轮)` : ""}
+                  </span>
+                </span>
+              </Tooltip>
+              <Tooltip label="移除引用会话">
+                <button
+                  type="button"
+                  onClick={() => removeSessionRef(ref.path)}
                 >
                   <X size={13} />
                 </button>

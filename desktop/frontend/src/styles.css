@@ -3852,6 +3852,42 @@ a[href] {
   border-right: 0;
   border-top: 0;
 }
+/* past:chats hover preview (PR-C2). Inherits colors from the .tooltip container
+   (--fg / --fg-dim / --fg-faint / --border / --bg-elev) and only adjusts layout. */
+.past-chat-hover {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 300px;
+}
+.past-chat-hover__title {
+  font-weight: 600;
+  color: var(--fg);
+  word-break: break-word;
+}
+.past-chat-hover__preview {
+  color: var(--fg-dim);
+  word-break: break-word;
+  max-height: 96px;
+  overflow: hidden;
+  /* fade the cut so long previews don't look amputated */
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+}
+.past-chat-hover__meta {
+  color: var(--fg-faint);
+  font-size: 11px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.past-chat-hover__path {
+  color: var(--fg-faint);
+  font-size: 11px;
+  word-break: break-all;
+  max-height: 32px;
+  overflow: hidden;
+}
 .workspace-empty {
   padding: 18px 0;
   color: var(--fg-faint);
@@ -6736,7 +6772,34 @@ a[href] {
   color: var(--fg);
   background: var(--hover);
 }
-
+.composer-context__item--session {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+.composer-context__item--session .composer-context__label > svg {
+  color: var(--accent);
+}
+.slashmenu__item--special {
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+}
+.slashmenu__item--special:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+.slashmenu__item--back {
+  border-top: 1px solid var(--border);
+  color: var(--fg-dim);
+}
+.slashmenu__item--back:hover {
+  background: var(--hover);
+}
+.slashmenu__item--empty {
+  color: var(--fg-faint);
+  cursor: default;
+}
+.slashmenu__item--empty:hover {
+  background: transparent;
+}
 .composer__pasted {
   display: flex;
   flex-direction: column;
