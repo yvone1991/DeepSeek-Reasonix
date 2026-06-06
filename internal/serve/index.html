@@ -283,7 +283,7 @@ input,textarea{font:inherit;color:inherit}
       <div class="sidebar__sep"></div>
       <div class="sidebar__item" id="btn-stats">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
-        <span>Stats</span>
+        <span>__('stats')</span>
       </div>
     </nav>
     <div class="sidebar__label" style="padding:8px 10px 4px">__('sessions')</div>
@@ -330,20 +330,20 @@ input,textarea{font:inherit;color:inherit}
     <div class="toolbar">
       <button class="toolbar__btn toolbar__btn--ok" id="btn-auto" title="__('auto_mode')">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 12l2 2 4-4"/></svg>
-        Auto
+        __('auto')
       </button>
       <button class="toolbar__btn" id="btn-plan" title="__('plan_mode')">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-        Plan
+        __('plan')
       </button>
       <button class="toolbar__btn" id="btn-bypass" title="__('yolo_mode')">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-        YOLO
+        __('yolo')
       </button>
       <div class="toolbar__sep"></div>
       <div class="status">
         <span class="status__dot" id="status-dot-footer"></span>
-        <span id="status-text">Ready</span>
+        <span id="status-text">__('ready')</span>
       </div>
       <div class="toolbar__spacer"></div>
       <div class="status" id="turn-info"></div>
@@ -422,6 +422,7 @@ const __T = {
     'balance': 'Balance',
     'ready': 'Ready',
     'thinking': 'Thinking...',
+    'stats': 'Stats',
     'statistics': 'Statistics',
     'model': 'Model',
     'total_tokens': 'Total Tokens',
@@ -466,7 +467,7 @@ const __T = {
     'no_sessions': 'No sessions',
     'error_loading': 'Error loading',
     'no_checkpoints': 'No checkpoints available.',
-    'compacted': __('compacted'),
+    'compacted': 'Compacted',
     'messages': 'messages',
     'compacting': 'Compacting...',
     'scope_both': 'Code + conversation',
@@ -475,6 +476,7 @@ const __T = {
     'scope_fork': 'Fork (new branch)',
     'scope_sumfrom': 'Summarize from here',
     'scope_sumupto': 'Summarize up to here',
+    'delete_confirm': 'Delete this session?',
     'welcome_tag': 'AI coding agent',
     'hint_commands': '/ commands',
     'hint_mode': 'Shift+Tab mode',
@@ -506,6 +508,7 @@ const __T = {
     'balance': '余额',
     'ready': '就绪',
     'thinking': '思考中...',
+    'stats': '统计',
     'statistics': '统计',
     'model': '模型',
     'total_tokens': '总 Token',
@@ -559,6 +562,7 @@ const __T = {
     'scope_fork': '分叉（新分支）',
     'scope_sumfrom': '从此处总结',
     'scope_sumupto': '总结到此处',
+    'delete_confirm': '删除此会话？',
     'welcome_tag': 'AI 编码助手',
     'hint_commands': '/ 命令',
     'hint_mode': 'Shift+Tab 模式',
@@ -673,7 +677,7 @@ function setConnState(state) {
 function addUserMsg(text) { hideWelcome(); const d=el('div','msg msg--user'); d.appendChild(el('span','msg__caret','›')); d.appendChild(el('div','msg__text',text)); log.appendChild(d); scrollDown(); currentMsg=null;currentText=null;currentReasoning=null; }
 function ensureMsg() { if(!currentMsg){hideWelcome();currentMsg=el('div','msg msg--assistant');log.appendChild(currentMsg);} return currentMsg; }
 function appendText(t) { const m=ensureMsg(); if(!currentText){currentText=document.createElement('span');currentText.className='msg__text'; const old=m.querySelector('.cursor');if(old)old.remove(); m.appendChild(currentText); m.appendChild(el('span','cursor'));} currentText.textContent+=t; scrollDown(); }
-function appendReasoning(t) { const m=ensureMsg(); if(!currentReasoning){const w=el('div','reasoning'); const b=el('button','reasoning__toggle'); b.innerHTML='<span class="reasoning__chevron">▶</span> Thinking...'; const body=el('div','reasoning__body'); body.style.display='none'; b.onclick=()=>{body.style.display=body.style.display==='none'?'':'none';b.querySelector('.reasoning__chevron').className='reasoning__chevron'+(body.style.display!=='none'?' reasoning__chevron--open':'');}; w.appendChild(b);w.appendChild(body); if(currentText) m.insertBefore(w,currentText); else m.appendChild(w); currentReasoning=body;} currentReasoning.textContent+=t; scrollDown(); }
+function appendReasoning(t) { const m=ensureMsg(); if(!currentReasoning){const w=el('div','reasoning'); const b=el('button','reasoning__toggle'); b.innerHTML='<span class="reasoning__chevron">▶</span> '+__('thinking'); const body=el('div','reasoning__body'); body.style.display='none'; b.onclick=()=>{body.style.display=body.style.display==='none'?'':'none';b.querySelector('.reasoning__chevron').className='reasoning__chevron'+(body.style.display!=='none'?' reasoning__chevron--open':'');}; w.appendChild(b);w.appendChild(body); if(currentText) m.insertBefore(w,currentText); else m.appendChild(w); currentReasoning=body;} currentReasoning.textContent+=t; scrollDown(); }
 function finalizeMsg() { if(currentMsg){const c=currentMsg.querySelector('.cursor');if(c)c.remove();} currentMsg=null;currentText=null;currentReasoning=null; }
 
 // ── tool cards (v1 pattern) ──
@@ -705,7 +709,7 @@ function renderToolProgress(tool) {
 // ── approval ──
 function showApproval(a) {
   const d=el('div','approval');
-  d.innerHTML='<div class="approval__header"><svg class="approval__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span class="approval__title">Approval Required</span></div><div class="approval__subject">'+escHtml(a.tool)+(a.subject?' — '+escHtml(a.subject):'')+'</div><div class="approval__actions"><button class="approval__btn approval__btn--allow" data-allow="true" data-session="false"><span class="approval__key">Y</span> '+__('allow')+'</button><button class="approval__btn approval__btn--allow" data-allow="true" data-session="true"><span class="approval__key">A</span> '+__('session')+'</button><button class="approval__btn approval__btn--deny" data-allow="false"><span class="approval__key">N</span> '+__('deny')+'</button></div>';
+  d.innerHTML='<div class="approval__header"><svg class="approval__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span class="approval__title">'+__('approval_title')+'</span></div><div class="approval__subject">'+escHtml(a.tool)+(a.subject?' — '+escHtml(a.subject):'')+'</div><div class="approval__actions"><button class="approval__btn approval__btn--allow" data-allow="true" data-session="false"><span class="approval__key">Y</span> '+__('allow')+'</button><button class="approval__btn approval__btn--allow" data-allow="true" data-session="true"><span class="approval__key">A</span> '+__('session')+'</button><button class="approval__btn approval__btn--deny" data-allow="false"><span class="approval__key">N</span> '+__('deny')+'</button></div>';
   log.appendChild(d);scrollDown();
   d.querySelectorAll('.approval__btn').forEach(btn=>{btn.onclick=()=>{post('/approve',{id:a.id,allow:btn.dataset.allow==='true',session:btn.dataset.session==='true'});d.remove();};});
   const onkey=e=>{if(e.key==='y'||e.key==='1'){post('/approve',{id:a.id,allow:true,session:false});d.remove();document.removeEventListener('keydown',onkey);}else if(e.key==='a'||e.key==='2'){post('/approve',{id:a.id,allow:true,session:true});d.remove();document.removeEventListener('keydown',onkey);}else if(e.key==='n'||e.key==='3'){post('/approve',{id:a.id,allow:false,session:false});d.remove();document.removeEventListener('keydown',onkey);}};
@@ -1046,7 +1050,7 @@ document.addEventListener('click',e=>{
   if(!del)return;
   e.stopPropagation();
   const path=del.dataset.path;
-  if(path&&confirm('Delete this session?')){post('/delete-session',{path}).then(()=>loadSessions());}
+  if(path&&confirm(__('delete_confirm'))){post('/delete-session',{path}).then(()=>loadSessions());}
 });
 
 // welcome examples
