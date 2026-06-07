@@ -164,6 +164,7 @@ const SESSION_REF_MAX_MESSAGES = 30;
 const SESSION_REF_MAX_CHARS = 20_000;
 const SESSION_CONTEXT_HEADER = "以下是用户引用的历史会话上下文：";
 const SESSION_CONTEXT_FOOTER = "当前用户问题：";
+const PAST_CHATS_MENU_ITEM = "past:chats";
 
 // limitSessionMessages keeps the most recent useful messages within a char budget.
 // Walks from the end so the truncation is always "drop the oldest", which matches
@@ -325,6 +326,7 @@ export function Composer({
   const [loadingPastChats, setLoadingPastChats] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const pastChatsItemRef = useRef<HTMLButtonElement>(null);
   const composerCardRef = useRef<HTMLDivElement>(null);
   const workspaceAnchorRef = useRef<HTMLDivElement>(null);
   const wasRunning = useRef(running);
@@ -486,7 +488,7 @@ export function Composer({
     | { kind: "pastChats" }
     | { kind: "file"; entry: DirEntry };
 
-  const includePastChatsItem = atRaw !== null && atDir === "";
+  const includePastChatsItem = atRaw !== null && atDir === "" && (atFrag === "" || PAST_CHATS_MENU_ITEM.startsWith(atFrag));
 
   const atMenuItems = useMemo<AtMenuItem[]>(
     () => [
@@ -1056,6 +1058,12 @@ export function Composer({
     setActive((prev) => (prev > maxIdx ? 0 : prev));
   }, [count]);
 
+  useEffect(() => {
+    if (menuMode === "at" && !showPastChats && includePastChatsItem && active === 0) {
+      pastChatsItemRef.current?.scrollIntoView({ block: "nearest" });
+    }
+  }, [active, includePastChatsItem, menuMode, showPastChats]);
+
   const removeAtToken = (value: string) => {
     return value.replace(/(?:^|\s)@[^\s]*$/, "").trimEnd();
   };
@@ -1412,6 +1420,7 @@ export function Composer({
           <div className="slashmenu" role="listbox">
             {includePastChatsItem && (
               <button
+                ref={pastChatsItemRef}
                 className={`slashmenu__item${active === 0 ? " slashmenu__item--active" : ""}`}
                 onMouseDown={(ev) => {
                   ev.preventDefault();
@@ -1420,7 +1429,7 @@ export function Composer({
                 onMouseMove={() => setActive(0)}
               >
                 <MessageSquare size={13} className="filemenu__icon" />
-                <span className="slashmenu__name">past:chats</span>
+                <span className="slashmenu__name">{PAST_CHATS_MENU_ITEM}</span>
               </button>
             )}
             <FileMenu
