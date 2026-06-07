@@ -40,6 +40,7 @@ export const zh: Record<DictKey, string> = {
   "sidebar.conversations": "会话",
   "sidebar.allHistory": "全部历史",
   "sidebar.trash": "回收站",
+  "sidebar.capabilities": "MCP 与技能",
   "sidebar.workspace": "工作区",
   "sidebar.changeWorkspace": "更改",
   "sidebar.navigation": "Reasonix 导航",
@@ -60,6 +61,10 @@ export const zh: Record<DictKey, string> = {
   // 话题栏
   "topicBar.renameSession": "重命名会话",
   "topicBar.more": "更多",
+  "topicBar.copyAll": "复制会话",
+  "topicBar.export": "导出会话",
+  "topicBar.exportMarkdown": "导出 Markdown",
+  "topicBar.exportJson": "导出 JSON",
 
   // 范围标签
   "scope.global": "范围：全局",

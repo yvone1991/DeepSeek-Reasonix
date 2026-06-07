@@ -39,6 +39,7 @@ export const en = {
   "sidebar.conversations": "Chats",
   "sidebar.allHistory": "All history",
   "sidebar.trash": "Trash",
+  "sidebar.capabilities": "MCP & Skills",
   "sidebar.workspace": "Workspace",
   "sidebar.changeWorkspace": "Change",
   "sidebar.navigation": "Reasonix navigation",
@@ -59,6 +60,10 @@ export const en = {
   // topic bar
   "topicBar.renameSession": "Rename session",
   "topicBar.more": "More",
+  "topicBar.copyAll": "Copy session",
+  "topicBar.export": "Export session",
+  "topicBar.exportMarkdown": "Export Markdown",
+  "topicBar.exportJson": "Export JSON",
 
   // scope labels
   "scope.global": "Scope: Global",
