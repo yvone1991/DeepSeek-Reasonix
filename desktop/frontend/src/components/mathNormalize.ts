@@ -58,6 +58,26 @@ function normalizeMathText(s: string): string {
     .replace(/\\\)/g, () => "$");
   r = r.replace(new RegExp(LB, "g"), "\\\\[");
 
+  // Step 2.5: repair inline $$. LLM output frequently puts $$
+  // immediately after prose ("...decomposes as$$<newline>\mathbf{...}").
+  // CommonMark requires a blank line before block math; without it
+  // remark-math parses the opening $$ as an empty math node and the
+  // formula leaks out as literal text. Force a blank line before any $$
+  // preceded by a letter or end-of-sentence punctuation (i.e. real
+  // prose). Digits are deliberately excluded so `c^2$$` in a formula
+  // stays put, and the freshly-rewritten \] closing delimiter (which
+  // step 2 already turned into $$) isn't doubled.
+  r = r.replace(/([A-Za-z\)\]\>\.。！？])\$\$/g, (_m, prev) => prev + "\n\n$$");
+
+  // Orphan opening $$ (model wrote display math but forgot the closing
+  // $$) is left alone: remark-math will swallow everything until the
+  // next $$ into one bad math block. Converting the orphan $$ to a
+  // lone $ would conflict with Step 5's non-greedy $/…$/ matcher and
+  // wrap whole prose paragraphs in &#36;…&#36;. Rescuing this case from
+  // the renderer is not feasible without making things worse; the right
+  // fix is upstream — a post-generation lint step or a stricter LLM
+  // system prompt that requires closing every display-math block.
+
   // Step 3: $$…$$ → display placeholders. The KaTeX-specific normalisation
   // runs here so |→\vert (with \| protected) and \text{} escapes both apply
   // to display math.
