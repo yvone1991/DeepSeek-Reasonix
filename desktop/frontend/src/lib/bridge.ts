@@ -248,6 +248,7 @@ export interface AppBindings {
   SetStatusBarItems(items: string[]): Promise<void>;
   SetDesktopLanguage(lang: string): Promise<void>;
   SetDesktopAppearance(theme: string, style: string): Promise<void>;
+  SetDesktopLayoutStyle(style: string): Promise<void>;
   SetDesktopCheckUpdates(enabled: boolean): Promise<void>;
   SetDesktopTelemetry(enabled: boolean): Promise<void>;
   SetDesktopMetrics(enabled: boolean): Promise<void>;
@@ -281,11 +282,13 @@ export interface AppBindings {
   ListProjectTree(): Promise<ProjectNode[]>;
   RenameProject(workspaceRoot: string, title: string): Promise<void>;
   SetProjectColor(workspaceRoot: string, color: string): Promise<void>;
+  SetProjectPinned(workspaceRoot: string, pinned: boolean): Promise<void>;
   ReorderProjects(workspaceRoots: string[]): Promise<void>;
   CreateTopic(scope: string, workspaceRoot: string, title: string): Promise<TopicMeta>;
   RenameTopic(topicID: string, title: string): Promise<void>;
   DeleteTopic(topicID: string): Promise<void>;
   TrashTopic(topicID: string): Promise<void>;
+  SetTopicPinned(topicID: string, pinned: boolean): Promise<void>;
   ContextPanel(tabID: string): Promise<ContextPanelInfo>;
   // New native-feel bindings (added with the desktop native-feel plan).
   ConfirmAction(req: NativeConfirmRequest): Promise<boolean>;
@@ -843,6 +846,7 @@ function makeMockApp(): AppBindings {
       ],
     },
     desktopLanguage: "",
+    desktopLayoutStyle: "classic",
     desktopTheme: "light",
     desktopThemeStyle: "graphite",
     closeBehavior: "background",
@@ -939,9 +943,15 @@ function makeMockApp(): AppBindings {
     }
     return node;
   };
+  const mockProjectTreeForDisplay = () => {
+    const pinnedProjects = mockProjectTree.filter((node) => node.kind === "project" && node.pinned);
+    if (pinnedProjects.length === 0) return mockProjectTree;
+    const rest = mockProjectTree.filter((node) => !(node.kind === "project" && node.pinned));
+    return [...pinnedProjects, ...rest];
+  };
   const cloneProjectTree = () => {
     if (mockProjectTree.length === 0) ensureMockGlobalFolder();
-    return JSON.parse(JSON.stringify(mockProjectTree)) as ProjectNode[];
+    return JSON.parse(JSON.stringify(mockProjectTreeForDisplay())) as ProjectNode[];
   };
   const projectChildren = (node: ProjectNode): ProjectNode[] => Array.isArray(node.children) ? node.children : [];
   const findMockTopic = (topicId: string): ProjectNode | null => {
@@ -950,6 +960,26 @@ function makeMockApp(): AppBindings {
       if (found) return found;
     }
     return null;
+  };
+  const setMockTopicPinned = (topicId: string, pinned: boolean) => {
+    for (const parent of mockProjectTree) {
+      const children = projectChildren(parent);
+      const index = children.findIndex((child) => child.topicId === topicId);
+      if (index < 0) continue;
+      const topic = { ...children[index], pinned: pinned || undefined };
+      if (!pinned) {
+        parent.children = children.map((child, i) => (i === index ? topic : child));
+        return;
+      }
+      const remaining = children.filter((_, i) => i !== index);
+      parent.children = [topic, ...remaining];
+      return;
+    }
+  };
+  const setMockProjectPinned = (workspaceRoot: string, pinned: boolean) => {
+    const index = mockProjectTree.findIndex((node) => node.kind === "project" && node.root === workspaceRoot);
+    if (index < 0) return;
+    mockProjectTree[index] = { ...mockProjectTree[index], pinned: pinned || undefined };
   };
   const deleteMockTopic = (topicId: string) => {
     for (const parent of mockProjectTree) {
@@ -961,6 +991,10 @@ function makeMockApp(): AppBindings {
   const mockTopicIsRunning = (topicId: string) => {
     const status = mockTopicStatus(topicId);
     return status === "streaming" || status === "thinking" || status === "waiting_confirmation";
+  };
+  const mockTopicIsBlank = (topicId: string) => {
+    const topic = findMockTopic(topicId);
+    return Boolean(topic && topic.label === t("mock.newSession") && !topic.turns && !topic.lastActivityAt && !topic.status);
   };
   const mockTopicRunsInScenario = (topicId: string) => runningMock && mockTopicIsRunning(topicId);
   const mockTopicHistory = (topicId: string): HistoryMessage[] => {
@@ -2431,6 +2465,9 @@ function makeMockApp(): AppBindings {
           settings.desktopTheme = theme === "auto" || theme === "light" ? theme : "dark";
           settings.desktopThemeStyle = style;
         },
+        async SetDesktopLayoutStyle(style: string) {
+          settings.desktopLayoutStyle = style === "workbench" ? "workbench" : "classic";
+        },
         async SetDesktopCheckUpdates(enabled: boolean) {
           settings.checkUpdates = enabled;
         },
@@ -2588,7 +2625,8 @@ function makeMockApp(): AppBindings {
       const existing = mockTabs.find((tab) =>
         tab.scope === targetScope &&
         (targetScope === "global" || tab.workspaceRoot === targetRoot) &&
-        !tab.running
+        !tab.running &&
+        mockTopicIsBlank(tab.topicId)
       );
       if (existing) {
         setMockActiveTab(existing.id);
@@ -2634,8 +2672,11 @@ function makeMockApp(): AppBindings {
       mockTabs = mockTabs.map((tab) =>
         (workspaceRoot ? tab.workspaceRoot === workspaceRoot : tab.scope === "global")
           ? { ...tab, projectColor: node.projectColor }
-          : tab,
+        : tab,
       );
+    },
+    async SetProjectPinned(workspaceRoot: string, pinned: boolean) {
+      setMockProjectPinned(workspaceRoot, pinned);
     },
     async ReorderProjects(workspaceRoots: string[]) {
       const projects = mockProjectTree.filter((node) => node.kind === "project");
@@ -2701,6 +2742,9 @@ function makeMockApp(): AppBindings {
     },
     async TrashTopic(topicID: string) {
       deleteMockTopic(topicID);
+    },
+    async SetTopicPinned(topicID: string, pinned: boolean) {
+      setMockTopicPinned(topicID, pinned);
     },
     async SaveWindowState(_state) {
       // no-op in browser dev — no real window geometry to persist

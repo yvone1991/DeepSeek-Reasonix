@@ -157,6 +157,7 @@ export interface ProjectNode {
   open?: boolean;
   running?: boolean;
   status?: ProjectTopicStatus;
+  pinned?: boolean;
   children?: ProjectNode[];
 }
 
@@ -805,6 +806,7 @@ export interface SettingsView {
   agent: AgentView;
   bot: BotSettingsView;
   desktopLanguage: string; // "" | "en" | "zh"; empty = auto
+  desktopLayoutStyle: string; // "classic" | "workbench"
   desktopTheme: string; // "auto" | "dark" | "light"
   desktopThemeStyle: string;
   closeBehavior: string; // "background" | "quit"

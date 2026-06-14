@@ -23,20 +23,25 @@ function ok(value: unknown, label: string) {
 console.log("\napp chrome tabs");
 
 ok(
-  !/\bTabBar\b/.test(appChromeSource),
-  "AppChrome does not render the old top session tab strip",
+  /import \{ TabBar \} from "\.\/TabBar";/.test(appChromeSource),
+  "AppChrome keeps the classic top session tab strip implementation",
 );
 
 for (const propName of ["onTabChange", "onTabClose", "onTabsClose", "onTabsReorder", "onNewTab"]) {
   ok(
-    !new RegExp(`\\b${propName}\\b`).test(appChromeSource),
-    `AppChrome does not expose ${propName}`,
+    new RegExp(`\\b${propName}\\b`).test(appChromeSource),
+    `AppChrome exposes ${propName} for classic tabs`,
   );
 }
 
 ok(
-  !/app-chrome__tab-strip/.test(appChromeSource),
-  "AppChrome markup does not include a tab strip container",
+  /app-chrome__tab-strip/.test(appChromeSource),
+  "AppChrome markup includes classic tab strip containers",
+);
+
+ok(
+  /workbenchChrome \? \(\s*<span className="app-chrome__spacer" aria-hidden="true" \/>/s.test(appChromeSource),
+  "AppChrome workbench branch skips the tab strip",
 );
 
 console.log(`\n${passed} passed, ${failed} failed`);
