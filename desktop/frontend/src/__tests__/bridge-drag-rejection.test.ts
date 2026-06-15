@@ -1,6 +1,6 @@
 // Run: tsx src/__tests__/bridge-drag-rejection.test.ts
 
-import { isWailsNonFileDragError } from "../lib/bridge";
+import { isWailsNonFileDragError, isWailsNonFileDragErrorEvent } from "../lib/bridge";
 
 let passed = 0;
 let failed = 0;
@@ -37,6 +37,26 @@ eq(
   isWailsNonFileDragError("network invalid argument", true),
   false,
   "does not suppress broader messages that merely contain invalid argument",
+);
+eq(
+  isWailsNonFileDragError("Uncaught TypeError: invalid argument", true),
+  true,
+  "normalizes Chromium's window.error message prefix",
+);
+eq(
+  isWailsNonFileDragErrorEvent({ message: "Uncaught TypeError: invalid argument", error: undefined }, true),
+  true,
+  "suppresses invalid argument delivered through ErrorEvent.message",
+);
+eq(
+  isWailsNonFileDragErrorEvent({ message: "Uncaught TypeError: invalid argument", error: new TypeError("invalid argument") }, true),
+  true,
+  "suppresses invalid argument delivered through ErrorEvent.error.message",
+);
+eq(
+  isWailsNonFileDragErrorEvent({ message: "Uncaught TypeError: invalid argument", error: new TypeError("invalid argument") }, false),
+  false,
+  "keeps ErrorEvent invalid argument visible without a recent native file drag",
 );
 
 console.log(`\n${passed} passed, ${failed} failed`);
