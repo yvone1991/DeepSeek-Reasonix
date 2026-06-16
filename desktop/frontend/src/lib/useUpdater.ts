@@ -72,7 +72,11 @@ export function useUpdater(): Updater {
         setStatus({ kind: "error", message: info.err });
         return;
       }
-      setStatus(info.available ? { kind: "available", info } : { kind: "upToDate", current: info.current });
+      if (!info.available) {
+        setStatus({ kind: "upToDate", current: info.current });
+        return;
+      }
+      setStatus(info.downloaded ? { kind: "downloaded", info } : { kind: "available", info });
     } catch (e) {
       setStatus({ kind: "error", message: errMsg(e) });
     }

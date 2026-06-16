@@ -569,28 +569,6 @@ func applyLinux(targz []byte) error {
 	return selfupdate.Apply(bytes.NewReader(bin), selfupdate.Options{})
 }
 
-// applyWindows writes the downloaded NSIS installer to a temp file and launches it.
-// The per-user installer needs no admin rights and its finish page relaunches the
-// app; the caller then exits so the installer can replace the running exe. The
-// installer targets the running app's own directory (issue #3217) so an update
-// overwrites in place instead of landing a second copy at the per-user default —
-// this also covers upgrades from builds that predate the registry InstallLocation.
-func applyWindows(installer []byte) error {
-	f, err := os.CreateTemp("", "reasonix-update-*.exe")
-	if err != nil {
-		return err
-	}
-	name := f.Name()
-	if _, err := f.Write(installer); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return applyWindowsFile(name)
-}
-
 func applyWindowsFile(path string) error {
 	return installerCommand(path, currentInstallDir()).Start()
 }
