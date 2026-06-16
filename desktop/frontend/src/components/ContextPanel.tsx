@@ -1,7 +1,6 @@
-// ContextPanel shows the active tab's context gauge, token usage, read files,
-// and workspace changes. All visible text is routed through the i18n dictionary.
+// ContextPanel shows the active tab's context gauge and token usage.
+// All visible text is routed through the i18n dictionary.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileText } from "lucide-react";
 import { asArray } from "../lib/array";
 import { app } from "../lib/bridge";
 import { useI18n, type Translator } from "../lib/i18n";
@@ -18,21 +17,11 @@ interface ContextPanelProps {
   sessionCurrency?: string;
   sessionGen?: number;
   refreshKey?: number;
-  onOpenWorkspaceMode?: (mode: "files" | "changed") => void;
-  onOpenWorkspaceFile?: (path: string) => void;
-  onOpenWorkspaceFileList?: (paths: string[]) => void;
-  onOpenWorkspaceChangeList?: (changes: ContextFileRow[]) => void;
-  onOpenWorkspaceChangeFile?: (path: string) => void;
 }
 
 function fmtTokens(n: number): string {
   if (n >= 1000) return `${Math.round(n / 1000)}k`;
   return String(n);
-}
-
-function fmtTime(ms?: number): string {
-  if (!ms) return "";
-  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function fmtDuration(ms: number, t: Translator): string {
@@ -55,8 +44,6 @@ interface HealthResult {
   shortKey: DictKey;
   vars: Record<string, string | number>;
 }
-
-type ContextFileRow = { key: string; path: string; meta: string; time: string; detail: string };
 
 export function contextCostDisplay({
   info,
@@ -219,11 +206,6 @@ export function ContextPanel({
   sessionCurrency,
   sessionGen,
   refreshKey,
-  onOpenWorkspaceMode,
-  onOpenWorkspaceFile,
-  onOpenWorkspaceFileList,
-  onOpenWorkspaceChangeList,
-  onOpenWorkspaceChangeFile,
 }: ContextPanelProps) {
   const { locale, t } = useI18n();
   const [info, setInfo] = useState<ContextPanelInfo | null>(null);
@@ -301,21 +283,7 @@ export function ContextPanel({
   const elapsed = info?.elapsedMs && info.elapsedMs > 0 ? info.elapsedMs : derivedElapsed;
   const derivedRequestCount = Math.max(readFiles.length + changedFiles.length, 0);
   const requestCount = info?.requestCount && info.requestCount > 0 ? info.requestCount : derivedRequestCount;
-  const readRows = readFiles.map((f, i) => ({
-    key: `${f.path}-${i}`,
-    path: f.path,
-    meta: `#${f.turn}`,
-    time: fmtTime(f.time),
-    detail: f.limit ? `${f.offset ?? 0}-${(f.offset ?? 0) + f.limit}${f.truncated ? " truncated" : ""}` : "",
-  }));
-  const changedRows = changedFiles.map((f, i) => ({
-    key: `${f.path}-${i}`,
-    path: f.path,
-    meta: f.gitStatus || asArray(f.sources).join(", ") || "changed",
-    time: fmtTime(f.latestTime),
-    detail: asArray(f.turns).length > 0 ? `T${asArray(f.turns).join(",")}` : "",
-  }));
-  const health = contextHealth(usagePct, Math.round(cachePct), readRows.length);
+  const health = contextHealth(usagePct, Math.round(cachePct), readFiles.length);
 
   return (
     <div className="context-panel">
@@ -376,36 +344,6 @@ export function ContextPanel({
               <MetricCard label={t("context.compaction")} value={compactPct > 0 ? `${compactPct}%` : "-"} />
             </div>
           </section>
-          <PreviewSection
-            title={t("context.referencedFiles")}
-            meta={t("context.readMeta", { count: readRows.length })}
-            action={t("context.viewAll")}
-            onAction={() => {
-              if (onOpenWorkspaceFileList) {
-                onOpenWorkspaceFileList(readRows.map((row) => row.path));
-                return;
-              }
-              onOpenWorkspaceMode?.("files");
-            }}
-            onRowAction={onOpenWorkspaceFile}
-            rows={readRows.slice(0, 3)}
-            empty={t("context.noReads")}
-          />
-          <PreviewSection
-            title={t("context.sessionChanges")}
-            meta={t("context.changedMeta", { count: changedRows.length })}
-            action={t("context.viewAll")}
-            onAction={() => {
-              if (onOpenWorkspaceChangeList) {
-                onOpenWorkspaceChangeList(changedRows);
-                return;
-              }
-              onOpenWorkspaceMode?.("changed");
-            }}
-            onRowAction={onOpenWorkspaceChangeFile}
-            rows={changedRows.slice(0, 3)}
-            empty={t("context.noChanges")}
-          />
         </section>
       </div>
 
@@ -419,35 +357,6 @@ function SectionHeading({ title, meta }: { title: string; meta?: string }) {
       <h3>{title}</h3>
       {meta && <span>{meta}</span>}
     </header>
-  );
-}
-
-function PreviewSection({
-  title,
-  meta,
-  action,
-  onAction,
-  onRowAction,
-  rows,
-  empty,
-}: {
-  title: string;
-  meta?: string;
-  action: string;
-  onAction: () => void;
-  onRowAction?: (path: string) => void;
-  rows: ContextFileRow[];
-  empty: string;
-}) {
-  return (
-    <section className="context-panel__preview">
-      <header className="context-panel__preview-head">
-        <h3>{title}</h3>
-        {meta && <span>{meta}</span>}
-        {rows.length > 0 && <button type="button" onClick={onAction}>{action}</button>}
-      </header>
-      <FileTable rows={rows} empty={empty} compact onRowAction={onRowAction} />
-    </section>
   );
 }
 
@@ -468,59 +377,6 @@ function MetricCard({ label, value, tone, wide }: { label: string; value: string
     <div className={`context-panel__metric${toneClass}${wideClass}`}>
       <span>{label}</span>
       <strong>{value}</strong>
-    </div>
-  );
-}
-
-function FileTable({
-  rows,
-  empty,
-  compact = false,
-  onRowAction,
-}: {
-  rows: ContextFileRow[];
-  empty: string;
-  compact?: boolean;
-  onRowAction?: (path: string) => void;
-}) {
-  if (rows.length === 0) return <div className="context-panel__empty">{empty}</div>;
-  return (
-    <div className={`context-panel__file-list${compact ? " context-panel__file-list--compact" : ""}`}>
-      {rows.map((row) => {
-        const content = (
-          <>
-            <span className="context-panel__file-main">
-              <FileText size={14} />
-              <span className="context-panel__file-copy">
-                <span>{row.path}</span>
-                {row.detail && <small>{row.detail}</small>}
-              </span>
-            </span>
-            <span className="context-panel__file-meta">
-              <span className="context-panel__file-turn">{row.meta}</span>
-              {row.time && <span>{row.time}</span>}
-            </span>
-          </>
-        );
-        if (onRowAction) {
-          return (
-            <button
-              className="context-panel__file-row context-panel__file-row--button"
-              key={row.key}
-              type="button"
-              title={row.path}
-              onClick={() => onRowAction(row.path)}
-            >
-              {content}
-            </button>
-          );
-        }
-        return (
-          <div className="context-panel__file-row" key={row.key} title={row.path}>
-            {content}
-          </div>
-        );
-      })}
     </div>
   );
 }

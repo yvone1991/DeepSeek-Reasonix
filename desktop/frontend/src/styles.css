@@ -17887,157 +17887,6 @@ a[href] {
   font-style: normal;
 }
 
-.context-panel__preview {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 0;
-}
-
-.context-panel__preview + .context-panel__preview {
-  margin-top: 6px;
-}
-
-.context-panel__preview-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 28px;
-}
-
-.context-panel__preview-head h3 {
-  flex: 1;
-  margin: 0;
-  color: var(--fg);
-  font-size: 13px;
-  line-height: 1.2;
-  font-weight: 650;
-}
-
-.context-panel__preview-head > span {
-  flex: 0 0 auto;
-  color: var(--fg-faint);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
-.context-panel__preview-head button {
-  flex: 0 0 auto;
-  border: none;
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  font-size: 12px;
-}
-
-.context-panel__preview-head button:hover {
-  color: var(--fg);
-}
-
-.context-panel__empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 160px;
-  color: var(--fg-faint);
-  font-size: 13px;
-}
-
-.context-panel__file-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.context-panel__file-row {
-  min-height: var(--tree-row-height);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 8px;
-  border-radius: var(--tree-row-radius);
-  background: transparent;
-  color: var(--fg-dim);
-  font-size: 12.5px;
-}
-
-.context-panel__file-row--button {
-  width: 100%;
-  border: 0;
-  appearance: none;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.context-panel__file-row--button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.context-panel__file-row:hover {
-  background: var(--tree-row-hover-bg);
-  color: var(--fg);
-}
-
-.context-panel__file-list--compact .context-panel__file-row {
-  min-height: 34px;
-}
-
-.context-panel__file-main {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.context-panel__file-main svg {
-  flex: 0 0 auto;
-  color: var(--fg-faint);
-}
-
-.context-panel__file-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.context-panel__file-copy > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.context-panel__file-copy small {
-  color: var(--fg-faint);
-  font-size: 11px;
-  line-height: 1.1;
-}
-
-.context-panel__file-meta {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--fg-faint);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
-.context-panel__file-turn {
-  max-width: 76px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: var(--bg);
-  color: var(--fg-dim);
-}
-
 /* ----------------------------------------------------------------------------
  * Native-feel: overscroll containment, reduced-motion, view-transition suppression
  * -------------------------------------------------------------------------- */
@@ -20870,22 +20719,14 @@ a[href] {
   background: var(--accent-soft);
 }
 
-:root[data-theme-style] .context-panel__file-turn {
-  border-color: var(--border);
-  background: var(--bg-soft);
-  color: var(--fg-dim);
-}
-
 :root[data-theme-style] .context-panel__usage,
 :root[data-theme-style] .context-panel__section,
-:root[data-theme-style] .context-panel__stats,
-:root[data-theme-style] .context-panel__preview {
+:root[data-theme-style] .context-panel__stats {
   animation: graphite-message-in var(--dur-slow) var(--ease-out) both;
 }
 
 :root[data-theme-style] .context-panel__metric,
-:root[data-theme-style] .context-panel__section,
-:root[data-theme-style] .context-panel__preview {
+:root[data-theme-style] .context-panel__section {
   border-color: var(--border);
   border-radius: 8px;
   background: var(--bg-elev);
@@ -20895,16 +20736,6 @@ a[href] {
 :root[data-theme-style] .context-panel__donut-core {
   background: var(--bg-elev);
   box-shadow: inset 0 0 0 1px var(--border);
-}
-
-:root[data-theme-style] .context-panel__file-row {
-  border-radius: 7px;
-  transition: background var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--ease-out);
-}
-
-:root[data-theme-style] .context-panel__file-row:hover {
-  background: var(--workspace-files-hover);
-  transform: translateX(2px);
 }
 
 :root[data-theme-style] .workspace-tree-resizer::after {
