@@ -70,6 +70,14 @@ export function replaceAttachmentRefsForDisplay(text: string): string {
     });
 }
 
+export function restoreAttachmentRefsForSubmit(text: string): string {
+  return text.replace(namedAttachmentRefRe, (_full, lead: string, _label: string, token: string) => {
+    const { core, suffix } = splitTrailingPunctuation(token);
+    if (!core || !isDisplayReference(core)) return _full;
+    return `${lead}@${core}${suffix}`;
+  });
+}
+
 export function parseAttachmentRefsForDisplay(text: string): { text: string; attachments: DisplayAttachment[] } {
   const attachments: DisplayAttachment[] = [];
   const cleaned = text

@@ -246,7 +246,6 @@ type Action =
 // ---- reducer helpers (unchanged logic) ----
 
 export function historyMessagesToItems(messages: HistoryMessage[], idPrefix: string, startSeq = 0): { items: Item[]; seq: number } {
-  const loadedAt = Date.now();
   const resultByID = new Map<string, HistoryMessage>();
   for (const m of messages) {
     if (m.role === "tool" && m.toolCallId && !resultByID.has(m.toolCallId)) {
@@ -291,7 +290,7 @@ export function historyMessagesToItems(messages: HistoryMessage[], idPrefix: str
     }
     if (m.role === "user") {
       if (m.content.trim() === "") continue;
-      items.push({ kind: "user", id: `${idPrefix}${seq}`, text: m.content, createdAt: m.createdAt ?? loadedAt });
+      items.push({ kind: "user", id: `${idPrefix}${seq}`, text: m.content, createdAt: m.createdAt });
       seq++;
       continue;
     }
@@ -1182,9 +1181,9 @@ export function useController() {
   const forget = useCallback(async (name: string) => { await app.Forget(name).catch(() => {}); }, []);
   const saveDoc = useCallback(async (path: string, body: string) => { await app.SaveDoc(path, body).catch(() => {}); }, []);
 
-  const rewind = useCallback(async (turn: number, scope: string) => {
+  const rewind = useCallback(async (turn: number, scope: string): Promise<boolean> => {
     const sourceTabId = activeTabId;
-    if (!sourceTabId) return;
+    if (!sourceTabId) return false;
     const actionScope = (["fork", "summ-from", "summ-upto", "conversation", "code", "both"].includes(scope) ? scope : "both") as MessageActionScope;
     dispatchTo(sourceTabId, { type: "message_action_start", action: { turn, scope: actionScope } });
     dispatchTo(sourceTabId, { type: "local_notice", level: "info", text: messageActionBusyText(actionScope) });
@@ -1201,7 +1200,7 @@ export function useController() {
         } else {
           await syncActiveTabFromBackend(true);
         }
-        return;
+        return true;
       }
 
       if (actionScope === "summ-from") await app.SummarizeFrom(turn);
@@ -1213,8 +1212,10 @@ export function useController() {
       if (messages.length) dispatchTo(sourceTabId, { type: "history", messages });
       dispatchTo(sourceTabId, { type: "context", context: await app.ContextUsageForTab(sourceTabId) });
       dispatchTo(sourceTabId, { type: "checkpoints", checkpoints: asArray(await app.CheckpointsForTab(sourceTabId)) });
+      return true;
     } catch {
       /* The controller emits a warning notice with the specific failure reason. */
+      return false;
     } finally {
       dispatchTo(sourceTabId, { type: "message_action_done" });
     }

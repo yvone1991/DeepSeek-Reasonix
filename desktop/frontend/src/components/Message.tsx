@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight, FileText, Folder, GitBranch, Image, MessageS
 import { Markdown } from "./Markdown";
 import { CopyButton } from "./CopyButton";
 import { ProcessBrainIcon } from "./ProcessCard";
-import { parseAttachmentRefsForDisplay, sortDisplayAttachments } from "../lib/attachmentDisplay";
+import { parseAttachmentRefsForDisplay, restoreAttachmentRefsForSubmit, sortDisplayAttachments } from "../lib/attachmentDisplay";
 import { app } from "../lib/bridge";
 import { useT } from "../lib/i18n";
 import { useGSAPCollapse } from "../lib/useGSAPCollapse";
@@ -89,7 +89,7 @@ export function UserMessage({
   anchorId?: string;
   id?: string;
   createdAt?: number;
-  onEdit?: (turn: number, text: string) => boolean | void | Promise<boolean | void>;
+  onEdit?: (turn: number, displayText: string, submitText?: string) => boolean | void | Promise<boolean | void>;
   editDisabled?: boolean;
 }) {
   const t = useT();
@@ -98,7 +98,7 @@ export function UserMessage({
   const { text: displayText, attachments } = parseAttachmentRefsForDisplay(actionText);
   const orderedAttachments = sortDisplayAttachments(attachments);
   const sourceLabel = imSource ? imSourceLabel(imSource, t) : "";
-  const sentAt = messageDate(createdAt);
+  const sentAt = createdAt === undefined ? null : messageDate(createdAt);
   const canEdit = turn !== undefined && onEdit !== undefined && !editDisabled;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(actionText);
@@ -142,7 +142,7 @@ export function UserMessage({
     if (!next) return;
     setEditSubmitting(true);
     try {
-      const ok = await onEdit?.(turn as number, next);
+      const ok = await onEdit?.(turn as number, next, restoreAttachmentRefsForSubmit(next));
       if (ok !== false) setEditing(false);
     } finally {
       setEditSubmitting(false);
@@ -249,9 +249,11 @@ export function UserMessage({
       </div>
       {!editing && (
         <div className="msg-meta" role="group" aria-label={t("rewind.label")}>
-          <time className="msg-meta__time" dateTime={sentAt.toISOString()} title={sentAt.toLocaleString()}>
-            {formatMessageTime(sentAt)}
-          </time>
+          {sentAt && (
+            <time className="msg-meta__time" dateTime={sentAt.toISOString()} title={sentAt.toLocaleString()}>
+              {formatMessageTime(sentAt)}
+            </time>
+          )}
           <CopyButton text={actionText} label={t("msg.copy")} showInlineLabel={false} className="msg-meta__btn msg-meta__copy" />
           {onEdit && (
             <button
