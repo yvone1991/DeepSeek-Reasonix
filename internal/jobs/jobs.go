@@ -250,6 +250,7 @@ func (m *Manager) StartForSession(parentSession, kind, label string, run func(ct
 			j.tail = appendTail(j.tail, []byte(result), defaultTailBytes)
 			j.mu.Unlock()
 		}
+		targetDir := m.artifactTargetDirForJob(j)
 		j.mu.Lock()
 		if j.artifactFile != nil {
 			if closeErr := j.artifactFile.Close(); closeErr != nil && j.artifactErr == "" {
@@ -259,22 +260,16 @@ func (m *Manager) StartForSession(parentSession, kind, label string, run func(ct
 		}
 		if j.artifactErr != "" {
 			j.artifactComplete = false
-			if st == Done {
-				st = Failed
-			}
-			err = joinJobError(err, fmt.Errorf("job artifact incomplete: %s", j.artifactErr))
 		}
 		j.finishedAt = finishedAt
+		if targetDir != "" {
+			if moveErr := j.moveArtifactToDirLocked(targetDir); moveErr != nil {
+				j.noteArtifactErr("migration: " + moveErr.Error())
+			}
+		}
 		metaErr := m.writeJobMetaLocked(j, st)
 		if metaErr != nil {
-			if j.artifactErr == "" {
-				j.artifactErr = "metadata: " + metaErr.Error()
-			}
-			j.artifactComplete = false
-			if st == Done {
-				st = Failed
-			}
-			err = joinJobError(err, fmt.Errorf("job artifact metadata incomplete: %w", metaErr))
+			j.noteArtifactErr("metadata: " + metaErr.Error())
 		}
 		j.mu.Unlock()
 		// Queue the drain note (and emit the closing Notice) BEFORE publishing the
@@ -306,16 +301,6 @@ func runRecovered(ctx context.Context, out io.Writer, run func(context.Context, 
 		}
 	}()
 	return run(ctx, out)
-}
-
-func joinJobError(a, b error) error {
-	if a == nil {
-		return b
-	}
-	if b == nil {
-		return a
-	}
-	return fmt.Errorf("%v; %w", a, b)
 }
 
 func (m *Manager) openArtifactLocked(parentSession, id string) (logPath, metaPath string, file *os.File, artifactErr string) {
@@ -367,6 +352,54 @@ func (m *Manager) writeJobMetaLocked(j *Job, st Status) error {
 		ArtifactError:    j.artifactErr,
 		LogPath:          filepath.Base(j.artifactPath),
 	})
+}
+
+func (m *Manager) artifactTargetDirForJob(j *Job) string {
+	if j == nil {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session := strings.TrimSpace(j.SessionID)
+	if session == "" {
+		return ""
+	}
+	return strings.TrimSpace(m.artifactDirs[session])
+}
+
+func (j *Job) noteArtifactErr(msg string) {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return
+	}
+	if j.artifactErr == "" {
+		j.artifactErr = msg
+	} else {
+		j.artifactErr += "; " + msg
+	}
+	j.artifactComplete = false
+}
+
+func (j *Job) moveArtifactToDirLocked(dir string) error {
+	dir = strings.TrimSpace(dir)
+	if dir == "" || j.artifactPath == "" {
+		return nil
+	}
+	if filepath.Clean(filepath.Dir(j.artifactPath)) == filepath.Clean(dir) {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	newLogPath := filepath.Join(dir, filepath.Base(j.artifactPath))
+	if err := moveArtifactFile(j.artifactPath, newLogPath); err != nil {
+		return err
+	}
+	j.artifactPath = newLogPath
+	if j.artifactMetaPath != "" {
+		j.artifactMetaPath = filepath.Join(dir, filepath.Base(j.artifactMetaPath))
+	}
+	return nil
 }
 
 func (m *Manager) monitorStalled(parentSession string, j *Job) {
@@ -861,9 +894,6 @@ func (m *Manager) recordArtifactMigrationError(parentSession string, err error) 
 			j.artifactErr = "migration: " + err.Error()
 			j.artifactComplete = false
 		}
-		if j.status == Done {
-			j.status = Failed
-		}
 		j.mu.Unlock()
 	}
 	active := m.active
@@ -881,17 +911,12 @@ type artifactMigrationJob struct {
 func (m *Manager) migrateArtifactDirForSession(parentSession, oldDir, newDir string) error {
 	locked := m.lockArtifactJobsForMigration(parentSession, oldDir)
 	defer unlockArtifactMigrationJobs(locked)
-	closeErr := closeArtifactMigrationFiles(locked)
-	migrateErr := migrateArtifactDir(oldDir, newDir)
-	reopenDir := oldDir
+	skip := openArtifactMigrationFiles(locked)
+	migrateErr := migrateArtifactDirSkipping(oldDir, newDir, skip)
 	if migrateErr == nil {
 		rebaseArtifactMigrationJobs(locked, newDir)
-		reopenDir = newDir
 	}
-	if reopenErr := reopenArtifactMigrationFiles(locked, reopenDir); reopenErr != nil {
-		return joinJobError(closeErr, joinJobError(migrateErr, reopenErr))
-	}
-	return joinJobError(closeErr, migrateErr)
+	return migrateErr
 }
 
 func (m *Manager) lockArtifactJobsForMigration(parentSession, dir string) []artifactMigrationJob {
@@ -930,27 +955,27 @@ func artifactPathInDir(path, dir string) bool {
 	return filepath.Dir(path) == dir
 }
 
-func closeArtifactMigrationFiles(jobs []artifactMigrationJob) error {
-	var err error
+func openArtifactMigrationFiles(jobs []artifactMigrationJob) map[string]bool {
+	skip := map[string]bool{}
 	for _, item := range jobs {
 		j := item.job
 		if j == nil || j.artifactFile == nil {
 			continue
 		}
-		if closeErr := j.artifactFile.Close(); closeErr != nil {
-			j.artifactErr = closeErr.Error()
-			j.artifactComplete = false
-			err = joinJobError(err, fmt.Errorf("close %s: %w", j.ID, closeErr))
+		if j.artifactPath != "" {
+			skip[filepath.Base(j.artifactPath)] = true
 		}
-		j.artifactFile = nil
+		if j.artifactMetaPath != "" {
+			skip[filepath.Base(j.artifactMetaPath)] = true
+		}
 	}
-	return err
+	return skip
 }
 
 func rebaseArtifactMigrationJobs(jobs []artifactMigrationJob, dir string) {
 	for _, item := range jobs {
 		j := item.job
-		if j == nil {
+		if j == nil || item.wasOpen {
 			continue
 		}
 		if j.artifactPath != "" {
@@ -962,30 +987,6 @@ func rebaseArtifactMigrationJobs(jobs []artifactMigrationJob, dir string) {
 	}
 }
 
-func reopenArtifactMigrationFiles(jobs []artifactMigrationJob, dir string) error {
-	var err error
-	for _, item := range jobs {
-		j := item.job
-		if j == nil || !item.wasOpen {
-			continue
-		}
-		path := j.artifactPath
-		if path == "" {
-			path = filepath.Join(dir, j.ID+jobLogExt)
-			j.artifactPath = path
-		}
-		f, openErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if openErr != nil {
-			j.artifactErr = openErr.Error()
-			j.artifactComplete = false
-			err = joinJobError(err, fmt.Errorf("reopen %s: %w", j.ID, openErr))
-			continue
-		}
-		j.artifactFile = f
-	}
-	return err
-}
-
 func unlockArtifactMigrationJobs(jobs []artifactMigrationJob) {
 	for i := len(jobs) - 1; i >= 0; i-- {
 		if jobs[i].job != nil {
@@ -995,6 +996,10 @@ func unlockArtifactMigrationJobs(jobs []artifactMigrationJob) {
 }
 
 func migrateArtifactDir(src, dst string) error {
+	return migrateArtifactDirSkipping(src, dst, nil)
+}
+
+func migrateArtifactDirSkipping(src, dst string, skip map[string]bool) error {
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1007,6 +1012,9 @@ func migrateArtifactDir(src, dst string) error {
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {
+			continue
+		}
+		if skip[entry.Name()] {
 			continue
 		}
 		if err := moveArtifactFile(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name())); err != nil {

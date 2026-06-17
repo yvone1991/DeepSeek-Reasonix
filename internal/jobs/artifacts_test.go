@@ -115,20 +115,53 @@ func TestSetActiveSessionPathMigratesRunningJobArtifacts(t *testing.T) {
 		return "", nil
 	})
 	<-wroteBefore
+	j.mu.Lock()
+	oldPath := j.artifactPath
+	j.mu.Unlock()
 
 	m.SetActiveSessionPath("session", sessionPath)
 	j.mu.Lock()
 	gotPath := j.artifactPath
 	j.mu.Unlock()
-	if !strings.HasPrefix(gotPath, ArtifactDir(sessionPath)+string(filepath.Separator)) {
-		t.Fatalf("artifact path = %q, want under %q", gotPath, ArtifactDir(sessionPath))
+	if gotPath != oldPath {
+		t.Fatalf("running artifact path = %q, want unchanged %q before completion", gotPath, oldPath)
 	}
 
 	releaseOnce.Do(func() { close(release) })
 	<-j.done
+	j.mu.Lock()
+	donePath := j.artifactPath
+	j.mu.Unlock()
+	if !strings.HasPrefix(donePath, ArtifactDir(sessionPath)+string(filepath.Separator)) {
+		t.Fatalf("completed artifact path = %q, want under %q", donePath, ArtifactDir(sessionPath))
+	}
 	res := m.WaitForSession(context.Background(), "session", []string{j.ID}, 1)
 	if len(res) != 1 || !strings.Contains(res[0].Output, "before\n") || !strings.Contains(res[0].Output, "after\n") {
 		t.Fatalf("wait after migration = %+v, want before and after output", res)
+	}
+}
+
+func TestArtifactFailureDoesNotFailSuccessfulJob(t *testing.T) {
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	if err := os.WriteFile(ArtifactDir(sessionPath), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(event.Discard)
+	defer m.Close()
+	m.SetActiveSessionPath("session", sessionPath)
+
+	j := m.StartForSession("session", "task", "artifact fail", func(context.Context, io.Writer) (string, error) {
+		return "successful result", nil
+	})
+	<-j.done
+
+	res := m.WaitForSession(context.Background(), "session", []string{j.ID}, 1)
+	if len(res) != 1 || res[0].Status != Done {
+		t.Fatalf("wait = %+v, want one done result", res)
+	}
+	if !strings.Contains(res[0].Output, "successful result") || !strings.Contains(res[0].Output, "job artifact incomplete:") {
+		t.Fatalf("output = %q, want result and artifact warning", res[0].Output)
 	}
 }
 
@@ -204,8 +237,8 @@ func TestSetActiveSessionPathAdoptsUnscopedJobsOnMigrationFailure(t *testing.T) 
 	m.SetActiveSessionPath("session", sessionPath)
 
 	out, status, ok := m.OutputForSession("session", j.ID)
-	if !ok || status != Failed {
-		t.Fatalf("scoped output ok/status = %v/%s, want true/failed", ok, status)
+	if !ok || status != Done {
+		t.Fatalf("scoped output ok/status = %v/%s, want true/done", ok, status)
 	}
 	if !strings.Contains(out, "temporary answer") || !strings.Contains(out, "job artifact incomplete: migration:") {
 		t.Fatalf("scoped output = %q, want answer and migration error", out)
