@@ -1993,6 +1993,31 @@ func loadTabsFile() desktopTabsFile {
 	return f
 }
 
+func desktopMCPMigrationRoots(tabs desktopTabsFile) []string {
+	seen := map[string]bool{}
+	var roots []string
+	add := func(root string) {
+		root = normalizeProjectRoot(root)
+		if root == "" || seen[root] {
+			return
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	if cur := loadWorkspace(); cur != "" {
+		add(cur)
+	}
+	for _, entry := range tabs.Tabs {
+		if entry.Scope == "project" {
+			add(entry.WorkspaceRoot)
+		}
+	}
+	for _, project := range loadProjectsFile().Projects {
+		add(project.Root)
+	}
+	return roots
+}
+
 func loadProjectsFile() desktopProjectFile {
 	path := filepath.Join(desktopConfigDir(), desktopProjectsFile)
 	b, err := os.ReadFile(path)

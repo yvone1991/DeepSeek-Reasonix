@@ -154,6 +154,11 @@ func migrateLegacyConfigForCLI() {
 	if _, err := config.MigrateLegacyIfNeeded(); err != nil {
 		fmt.Fprintln(os.Stderr, "warning: config migration failed:", err)
 	}
+	if wd, err := os.Getwd(); err == nil {
+		if _, err := config.MigrateMCPToUserConfigOnUpgrade([]string{wd}); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: MCP config migration failed:", err)
+		}
+	}
 }
 
 func configureCLIThemeFromConfig() {
