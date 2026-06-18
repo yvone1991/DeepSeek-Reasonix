@@ -46,7 +46,8 @@ func (p *ParallelTasksTool) Schema() json.RawMessage {
         "tools":{"type":"array","items":{"type":"string"},"description":"Optional tool whitelist for the sub-agent."},
         "max_steps":{"type":"integer","description":"Optional max tool-call rounds.","minimum":1},
         "model":{"type":"string","description":"Optional model override."},
-        "effort":{"type":"string","description":"Optional reasoning effort override."}
+        "effort":{"type":"string","description":"Optional reasoning effort override."},
+        "depends_on":{"type":"array","items":{"type":"integer"},"description":"Optional 0-based indices of tasks this task depends on. Dependent tasks start only after all their dependencies finish."}
       },
       "required":["prompt"]
     }
@@ -66,6 +67,7 @@ type ParallelTaskItem struct {
 	MaxSteps    int      `json:"max_steps"`
 	Model       string   `json:"model"`
 	Effort      string   `json:"effort"`
+	DependsOn   []int    `json:"depends_on"`
 }
 
 func (p *ParallelTasksTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
@@ -85,6 +87,184 @@ func (p *ParallelTasksTool) Execute(ctx context.Context, args json.RawMessage) (
 		return "", err
 	}
 
+	type subResult struct {
+		index  int
+		output string
+		err    error
+	}
+
+	n := len(params.Tasks)
+
+	// Validate: no out-of-range deps, no self-references.
+	for i, t := range params.Tasks {
+		if strings.TrimSpace(t.Prompt) == "" {
+			return "", fmt.Errorf("task %d: prompt is required", i+1)
+		}
+		for _, dep := range t.DependsOn {
+			if dep < 0 || dep >= n {
+				return "", fmt.Errorf("task %d: depends_on[%d] = %d out of range (0-%d)", i+1, dep, dep, n-1)
+			}
+			if dep == i {
+				return "", fmt.Errorf("task %d: self-referencing depends_on", i+1)
+			}
+		}
+	}
+
+	// Dependency state: remaining = number of deps not yet completed.
+	remaining := make([]int, n)
+	running := make([]bool, n)
+	done := make([]bool, n)
+	outputs := make([]string, n)
+	errors := make([]error, n)
+	for i, t := range params.Tasks {
+		remaining[i] = len(t.DependsOn)
+		running[i] = false
+		done[i] = false
+	}
+
+	// Channels for task completion signals and for spawning tasks.
+	type runRequest struct {
+		idx int
+		t   parallelTaskItem
+	}
+	spawnCh := make(chan runRequest, n)
+	doneCh := make(chan subResult, n)
+	allDone := make(chan struct{})
+
+	// Dispatcher goroutine: spawns tasks when their deps are satisfied.
+	go func() {
+		spawned := 0
+		completed := 0
+		// Seed: spawn all tasks with no dependencies.
+		for i, t := range params.Tasks {
+			if remaining[i] == 0 && !running[i] && !done[i] {
+				running[i] = true
+				spawnCh <- runRequest{idx: i, t: t}
+				spawned++
+			}
+		}
+
+		for completed < n {
+			r := <-doneCh
+			completed++
+			done[r.index] = true
+			outputs[r.index] = r.output
+			errors[r.index] = r.err
+
+			// Check if any waiting tasks are now unblocked.
+			for i, t := range params.Tasks {
+				if remaining[i] > 0 && !running[i] && !done[i] {
+					// Check if this dep is the one that just finished.
+					for _, dep := range t.DependsOn {
+						if dep == r.index {
+							remaining[i]--
+						}
+					}
+					if remaining[i] == 0 {
+						running[i] = true
+						spawnCh <- runRequest{idx: i, t: t}
+						spawned++
+					}
+				}
+			}
+		}
+		close(allDone)
+	}()
+
+	// Worker pool: goroutines that pick up spawn requests and run sub-tasks.
+	var wg sync.WaitGroup
+	for w := 0; w < n; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for req := range spawnCh {
+				idx, t := req.idx, req.t
+				label := t.Description
+				if label == "" {
+					label = fmt.Sprintf("task-%d", idx+1)
+				}
+
+				subID := fmt.Sprintf("%s/sub-%d", parentID, idx+1)
+				dispatchArgs, _ := json.Marshal(map[string]string{"prompt": t.Prompt, "description": label})
+				sink.Emit(event.Event{
+					Kind: event.ToolDispatch,
+					Tool: event.Tool{
+						ID: subID, ParentID: parentID, Name: "task",
+						Args: string(dispatchArgs), ReadOnly: true,
+					},
+				})
+
+				nested := subSinkFor(subID, sink)
+				modelRef, effortRef := p.taskTool.effectiveProfile(t.Model, t.Effort)
+				subReg := p.taskTool.buildSubReg(t.Tools)
+
+				maxSteps := t.MaxSteps
+				if maxSteps <= 0 {
+					maxSteps = 20
+				}
+
+				prov, pricing, ctxWin, err := resolveSubagentProvider(p.taskTool, modelRef, effortRef)
+				if err != nil {
+					sink.Emit(event.Event{
+						Kind: event.ToolResult,
+						Tool: event.Tool{ID: subID, ParentID: parentID, Name: "task", Err: err.Error()},
+					})
+					doneCh <- subResult{index: idx, err: err}
+					continue
+				}
+
+				sess := NewSession("")
+				output, runErr := RunSubAgentWithSession(ctx, prov, subReg, sess, t.Prompt, Options{
+					MaxSteps:          maxSteps,
+					Temperature:       p.taskTool.temperature,
+					Pricing:           pricing,
+					UsageSource:       event.UsageSourceSubagent,
+					Gate:              p.taskTool.gate,
+					ContextWindow:     ctxWin,
+					RecentKeep:        p.taskTool.recentKeep,
+					SoftCompactRatio:  p.taskTool.softCompactRatio,
+					CompactRatio:      p.taskTool.compactRatio,
+					CompactForceRatio: p.taskTool.compactForceRatio,
+					ArchiveDir:        p.taskTool.archiveDir,
+					KeepPolicy:        p.taskTool.keepPolicy,
+				}, nested)
+
+				if runErr != nil {
+					sink.Emit(event.Event{
+						Kind: event.ToolResult,
+						Tool: event.Tool{ID: subID, ParentID: parentID, Name: "task", Err: runErr.Error()},
+					})
+					doneCh <- subResult{index: idx, err: runErr}
+				} else {
+					sink.Emit(event.Event{
+						Kind: event.ToolResult,
+						Tool: event.Tool{ID: subID, ParentID: parentID, Name: "task", Output: output},
+					})
+					doneCh <- subResult{index: idx, output: output}
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(spawnCh)
+	<-allDone
+
+	// Collect in order.
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Completed %d parallel tasks:\n", n))
+	for i := 0; i < n; i++ {
+		if errors[i] != nil {
+			fmt.Fprintf(&b, "── task-%d ──\n[FAILED] %s\n", i+1, errors[i])
+		} else {
+			fmt.Fprintf(&b, "── task-%d ──\n%s\n", i+1, strings.TrimSpace(outputs[i]))
+		}
+	}
+	return b.String(), nil
+}
+
+// runAsBackgroundJobs is the fallback path when no event sink is available.
+func (p *ParallelTasksTool) runAsBackgroundJobs(ctx context.Context, tasks []parallelTaskItem) (string, error) {
 	jm, ok := jobs.FromContext(ctx)
 	if !ok {
 		return "", fmt.Errorf("background jobs are not available in this context")
