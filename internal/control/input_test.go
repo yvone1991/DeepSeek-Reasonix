@@ -288,6 +288,61 @@ func TestGoalCommandSetsReportsAndClears(t *testing.T) {
 	}
 }
 
+func TestParseGoalCommandWithStrict(t *testing.T) {
+	tests := []struct {
+		input  string
+		text   string
+		strict bool
+		ok     bool
+	}{
+		{"/goal --strict implement calculator", "implement calculator", true, true},
+		{"/goal implement calculator", "implement calculator", false, true},
+		{"/goal --strict", "", true, true},        // --strict shows status
+		{"/goal --strict status", "", true, true}, // --strict shows status
+	}
+	for _, tt := range tests {
+		cmd, ok := ParseGoalCommand(tt.input)
+		if ok != tt.ok {
+			t.Errorf("ParseGoalCommand(%q) ok = %v, want %v", tt.input, ok, tt.ok)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if cmd.Text != tt.text {
+			t.Errorf("ParseGoalCommand(%q).Text = %q, want %q", tt.input, cmd.Text, tt.text)
+		}
+		if cmd.Strict != tt.strict {
+			t.Errorf("ParseGoalCommand(%q).Strict = %v, want %v", tt.input, cmd.Strict, tt.strict)
+		}
+	}
+}
+
+func TestParseGoalCommandStrictOnlyConsumesLeadingFlags(t *testing.T) {
+	structuredGoal := "implement parser\n\n  keep  spacing\nliteral --strict stays"
+	cmd, ok := ParseGoalCommand("/goal --strict " + structuredGoal)
+	if !ok {
+		t.Fatal("ParseGoalCommand returned ok=false")
+	}
+	if !cmd.Strict {
+		t.Fatal("leading --strict should enable strict mode")
+	}
+	if cmd.Text != structuredGoal {
+		t.Fatalf("goal text was rewritten:\nwant %q\ngot  %q", structuredGoal, cmd.Text)
+	}
+
+	cmd, ok = ParseGoalCommand("/goal implement parser --strict literally")
+	if !ok {
+		t.Fatal("ParseGoalCommand with literal --strict returned ok=false")
+	}
+	if cmd.Strict {
+		t.Fatal("non-leading --strict should remain part of the goal text")
+	}
+	if want := "implement parser --strict literally"; cmd.Text != want {
+		t.Fatalf("goal text = %q, want %q", cmd.Text, want)
+	}
+}
+
 func TestComposeDrainsQueuedMemory(t *testing.T) {
 	c := New(Options{}) // no executor/memory — QueueMemory still queues a turn-tail note
 

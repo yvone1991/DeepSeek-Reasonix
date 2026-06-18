@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"strings"
+	"unicode"
 
 	"reasonix/internal/agent"
 	"reasonix/internal/skill"
@@ -354,6 +355,7 @@ const (
 type GoalCommand struct {
 	Action       GoalCommandAction
 	Text         string
+	Strict       bool
 	ResearchMode GoalResearchMode
 }
 
@@ -363,36 +365,46 @@ func ParseGoalCommand(input string) (GoalCommand, bool) {
 		return GoalCommand{}, false
 	}
 	args := strings.TrimSpace(trimmed[len("/goal"):])
-	switch strings.ToLower(args) {
+	strict, researchMode, actionArgs := parseLeadingGoalFlags(args)
+
+	switch strings.ToLower(actionArgs) {
 	case "", "status":
-		return GoalCommand{Action: GoalCommandStatus, ResearchMode: GoalResearchAuto}, true
+		return GoalCommand{Action: GoalCommandStatus, Strict: strict, ResearchMode: researchMode}, true
 	case "clear", "off", "stop", "done":
-		return GoalCommand{Action: GoalCommandClear, ResearchMode: GoalResearchAuto}, true
+		return GoalCommand{Action: GoalCommandClear, Strict: strict, ResearchMode: researchMode}, true
 	default:
-		mode, text := parseGoalResearchFlags(args)
-		if strings.TrimSpace(text) == "" {
-			return GoalCommand{Action: GoalCommandStatus, ResearchMode: mode}, true
-		}
-		return GoalCommand{Action: GoalCommandSet, Text: text, ResearchMode: mode}, true
+		return GoalCommand{Action: GoalCommandSet, Text: actionArgs, Strict: strict, ResearchMode: researchMode}, true
 	}
 }
 
-func parseGoalResearchFlags(args string) (GoalResearchMode, string) {
+func parseLeadingGoalFlags(args string) (bool, GoalResearchMode, string) {
+	strict := false
 	mode := GoalResearchAuto
-	fields := strings.Fields(args)
-	consumed := 0
-	for consumed < len(fields) {
-		switch strings.ToLower(fields[consumed]) {
+	rest := strings.TrimLeftFunc(args, unicode.IsSpace)
+	for rest != "" {
+		token, after := leadingGoalToken(rest)
+		switch strings.ToLower(token) {
+		case "--strict":
+			strict = true
 		case "--research", "--auto-research", "--deep":
 			mode = GoalResearchOn
 		case "--simple", "--no-research":
 			mode = GoalResearchOff
 		default:
-			return mode, strings.TrimSpace(strings.Join(fields[consumed:], " "))
+			return strict, mode, strings.TrimSpace(rest)
 		}
-		consumed++
+		rest = strings.TrimLeftFunc(after, unicode.IsSpace)
 	}
-	return mode, ""
+	return strict, mode, ""
+}
+
+func leadingGoalToken(s string) (string, string) {
+	for i, r := range s {
+		if unicode.IsSpace(r) {
+			return s[:i], s[i:]
+		}
+	}
+	return s, ""
 }
 
 // CustomCommand resolves a "/name args…" line against the loaded custom slash
