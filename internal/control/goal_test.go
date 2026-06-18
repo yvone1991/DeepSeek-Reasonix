@@ -1,6 +1,8 @@
 package control
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -122,6 +124,59 @@ func TestPlainInputWithStrongResearchSignalAutoStartsGoal(t *testing.T) {
 	}
 	if got := c.GoalStatus(); got != GoalStatusComplete {
 		t.Fatalf("GoalStatus() = %q, want complete", got)
+	}
+}
+
+func TestPlainInputAutoStartedGoalPreservesRefs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("important referenced evidence"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prov := &scriptedTurns{turns: [][]provider.Chunk{
+		textTurn("AutoResearch started and completed.\n\n[goal:complete]"),
+	}}
+	ag := agent.New(prov, tool.NewRegistry(), agent.NewSession(""), agent.Options{}, event.Discard)
+	events := make(chan event.Event, 8)
+	c := New(Options{
+		WorkspaceRoot: root,
+		Runner:        ag,
+		Executor:      ag,
+		Sink: event.FuncSink(func(e event.Event) {
+			if e.Kind == event.TurnDone || e.Kind == event.Notice {
+				events <- e
+			}
+		}),
+	})
+
+	c.Submit("持续排查直到根因明确，并验证 @notes.txt")
+	waitForTurnDone(t, events)
+
+	first := firstUserMessage(ag.Session().Messages)
+	for _, want := range []string{
+		"<active-goal>\n持续排查直到根因明确，并验证 @notes.txt",
+		"Referenced context:",
+		"important referenced evidence",
+		"AutoResearch protocol",
+	} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("auto-started goal with refs missing %q:\n%s", want, first)
+		}
+	}
+}
+
+func TestPlainInputAutoStartDoesNotMutateGoalWhenTurnRunning(t *testing.T) {
+	c := New(Options{})
+	c.mu.Lock()
+	c.running = true
+	c.mu.Unlock()
+
+	c.Submit("持续排查这个线上卡顿直到根因明确，并验证修复")
+
+	if got := c.Goal(); got != "" {
+		t.Fatalf("rejected concurrent auto-start should not set goal, got %q", got)
+	}
+	if got := c.GoalStatus(); got != GoalStatusStopped {
+		t.Fatalf("GoalStatus() = %q, want stopped", got)
 	}
 }
 

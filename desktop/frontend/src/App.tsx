@@ -138,6 +138,11 @@ function stripGoalResearchFlags(arg: string): string {
   return parts.join(" ");
 }
 
+function hasGoalResearchFlag(arg: string): boolean {
+  const first = arg.trim().split(/\s+/, 1)[0]?.toLowerCase();
+  return first === "--research" || first === "--auto-research" || first === "--deep" || first === "--simple" || first === "--no-research";
+}
+
 function isThemeMode(value: string): value is Theme {
   return value === "auto" || value === "light" || value === "dark";
 }
@@ -1505,7 +1510,15 @@ export default function App() {
         const arg = (goalCommand[1] ?? "").trim();
         const displayGoal = stripGoalResearchFlags(arg);
         if (displayGoal && !["status", "clear", "off", "stop", "done"].includes(displayGoal.toLowerCase())) {
-          applyGoal(displayGoal);
+          if (hasGoalResearchFlag(arg)) {
+            patchActiveComposerProfile({
+              collaborationMode: "goal",
+              goalDraftMode: false,
+              goal: displayGoal,
+            }, ["collaborationMode", "goal"]);
+          } else {
+            applyGoal(displayGoal);
+          }
         } else if (["clear", "off", "stop", "done"].includes(displayGoal.toLowerCase())) {
           applyGoal("");
         }
