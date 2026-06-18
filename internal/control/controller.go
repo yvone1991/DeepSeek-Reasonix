@@ -104,6 +104,10 @@ type Controller struct {
 	reg       *tool.Registry
 	pluginCtx context.Context
 
+	// goalStatePath is where the current goal state is persisted for session
+	// continuity. Empty means no persistence.
+	goalStatePath string
+
 	// Checkpoints (snapshot-based rewind). cp is the per-session store rebound when
 	// the session path changes; cpRoot is the workspace root used to guard restore
 	// writes. cpTurn is the monotonic turn counter (decoupled from the store so it
@@ -155,11 +159,14 @@ type Controller struct {
 	// injected for the current goal. On first [goal:complete] with all todos
 	// done, the agent is asked to self-verify before final completion.
 	goalSelfCheckDone bool
-	sessionPath       string
-	approvals         map[string]pendingApproval
-	asks              map[string]pendingAsk
-	granted           map[string]bool
-	nextID            int
+	// goalIdleTurns counts consecutive turns without any tool call. When this
+	// exceeds the threshold an idle reminder is injected via goalInterceptMsg.
+	goalIdleTurns int
+	sessionPath   string
+	approvals     map[string]pendingApproval
+	asks          map[string]pendingAsk
+	granted       map[string]bool
+	nextID        int
 	// turn counts model turns this session, passed to hooks in their payload.
 	turn int
 	// approvedPlanAutoApproveTools auto-allows writer tool calls without prompting.
@@ -244,6 +251,7 @@ const (
 
 const (
 	maxGoalAutoTurns  = 50
+	maxGoalIdleTurns  = 2
 	goalContinueTurn  = "Continue pursuing the active goal. If it is complete, provide the concise final result and end with [goal:complete]. If it is truly blocked on a user-owned decision after trying sensible defaults, end with [goal:blocked:<short reason>]. Otherwise do the next useful work and end with [goal:continue]."
 	goalSelfCheckTurn = "The agent signaled goal completion and all tasks are marked done. Before finalizing, perform a brief quality self-check:\n1. Verify any changed files compile or parse correctly\n2. Run the relevant tests if applicable\n3. Confirm the original requirements are met\nIf everything checks out, signal [goal:complete]. If issues are found, fix them and signal [goal:complete] when done."
 )
@@ -425,12 +433,21 @@ func ckptDir(sessionPath string) string {
 	return strings.TrimSuffix(sessionPath, ".jsonl") + ".ckpt"
 }
 
+// goalStatePath derives a session's persisted goal-state sidecar.
+func goalStatePath(sessionPath string) string {
+	if sessionPath == "" {
+		return ""
+	}
+	return strings.TrimSuffix(sessionPath, ".jsonl") + ".goal-state.json"
+}
+
 // rebindCheckpoints points the store at the (possibly new) session, loading any
 // checkpoints already on disk, and resets the turn boundaries. Called on
 // construction and whenever the session path changes (NewSession/Resume/SetSessionPath).
 func (c *Controller) rebindCheckpoints(sessionPath string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.goalStatePath = goalStatePath(sessionPath)
 	c.cp = checkpoint.New(ckptDir(sessionPath), c.cpRoot)
 	c.cpTurn = c.cp.NextTurn() // continue numbering past any checkpoints on disk
 	c.cpBound = c.cp.Bounds()  // rebuilt from persisted checkpoints so a resumed
@@ -713,6 +730,8 @@ func (c *Controller) advanceGoalAfterTurn() bool {
 		// Self-check passed — complete the goal.
 		c.goalIntercepts = 0
 		c.goalSelfCheckDone = false
+		c.goalIdleTurns = 0
+		c.saveGoalState()
 		c.goal = ""
 		c.goalStatus = GoalStatusComplete
 		c.goalBlocks = 0
@@ -739,6 +758,21 @@ func (c *Controller) advanceGoalAfterTurn() bool {
 		c.goalBlock = ""
 		c.goalIntercepts = 0
 		c.goalSelfCheckDone = false
+		c.goalIdleTurns = 0
+	}
+	// Idle detection: if the agent went multiple turns without any tool
+	// calls, inject a reminder to make progress (unless the goal is already
+	// completing or hitting the auto-turn limit).
+	if notice == "" && c.goalInterceptMsg == "" {
+		if c.toolWasCalledLastTurn() {
+			c.goalIdleTurns = 0
+		} else {
+			c.goalIdleTurns++
+			if c.goalIdleTurns >= maxGoalIdleTurns {
+				c.goalIdleTurns = 0
+				c.goalInterceptMsg = "No tool calls in recent turns. Either make progress with tools or signal [goal:blocked:<reason>]."
+			}
+		}
 	}
 	if notice == "" && c.goalTurns >= maxGoalAutoTurns {
 		c.goalStatus = GoalStatusBlocked
@@ -746,7 +780,11 @@ func (c *Controller) advanceGoalAfterTurn() bool {
 		c.goalIntercepts = 0
 		c.goalSelfCheckDone = false
 		c.goalInterceptMsg = ""
+		c.goalIdleTurns = 0
 		notice = c.goalBlock
+	}
+	if notice != "" {
+		c.saveGoalState()
 	}
 	cont := notice == ""
 	c.mu.Unlock()
@@ -789,13 +827,30 @@ func (c *Controller) incompleteGoalTodos() string {
 	}
 
 	var b strings.Builder
-	b.WriteString("The agent signaled goal completion but the following issues remain:\n")
+	b.WriteString("Goal signaled complete but issues remain:\n")
 	for _, p := range parts {
+		b.WriteString("- ")
 		b.WriteString(p)
 		b.WriteString("\n")
 	}
-	b.WriteString("\nIf the work is actually done, update your task list with todo_write or complete_step and run the required verification commands, then signal [goal:complete] again. Otherwise finish the remaining work.")
+	b.WriteString("Fix or use todo_write/complete_step to mark done, then [goal:complete] again.")
 	return b.String()
+}
+
+// toolWasCalledLastTurn reports whether the most recent assistant message
+// contained any tool calls, indicating the agent made observable progress.
+func (c *Controller) toolWasCalledLastTurn() bool {
+	msgs := c.History()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Role == provider.RoleAssistant {
+			return len(m.ToolCalls) > 0
+		}
+		if m.Role == provider.RoleUser {
+			return false
+		}
+	}
+	return false
 }
 
 func parseGoalStatusMarker(text string) (status, reason string, ok bool) {
@@ -856,7 +911,45 @@ func (c *Controller) stopGoal(status string) {
 	c.goalInterceptMsg = ""
 	c.goalIntercepts = 0
 	c.goalSelfCheckDone = false
+	c.goalIdleTurns = 0
+	c.saveGoalState()
 	c.mu.Unlock()
+}
+
+// saveGoalState persists the current goal state to disk for session continuity.
+func (c *Controller) saveGoalState() {
+	if c.goalStatePath == "" || c.executor == nil {
+		return
+	}
+	todos := c.executor.CanonicalTodoState()
+	state := goalState{
+		Goal:         c.goal,
+		Status:       c.goalStatus,
+		ResearchMode: c.goalResearchMode,
+		Turns:        c.goalTurns,
+		Blocks:       c.goalBlocks,
+		Block:        c.goalBlock,
+		Strict:       c.goalStrict,
+		Todos:        todos,
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(c.goalStatePath), 0o755)
+	_ = os.WriteFile(c.goalStatePath, data, 0o644)
+}
+
+// goalState is the serializable form of a running goal.
+type goalState struct {
+	Goal         string              `json:"goal,omitempty"`
+	Status       string              `json:"status,omitempty"`
+	ResearchMode GoalResearchMode    `json:"researchMode,omitempty"`
+	Turns        int                 `json:"turns,omitempty"`
+	Blocks       int                 `json:"blocks,omitempty"`
+	Block        string              `json:"block,omitempty"`
+	Strict       bool                `json:"strict,omitempty"`
+	Todos        []evidence.TodoItem `json:"todos,omitempty"`
 }
 
 // lastAssistantText returns the content of the most recent assistant message with
@@ -1047,6 +1140,12 @@ func (c *Controller) submitCommandOrTurn(trimmed, input, display string, scopedR
 				c.notice(err.Error())
 			}
 			return
+		case "/plan-exec":
+			c.applyPlanExec(trimmed, display)
+			return
+		case "/prometheus":
+			c.applyPrometheus(trimmed, display)
+			return
 		}
 		if c.managementNotice(trimmed) {
 			return
@@ -1179,6 +1278,116 @@ func ShortGoalForNotice(goal string) string {
 		return goal
 	}
 	return string(runes[:max]) + "..."
+}
+
+// applyPlanExec reads the current canonical todo list and starts a goal that
+// analyzes and dispatches independent steps concurrently via parallel_tasks.
+// Supports --strict flag: /plan-exec --strict enables strict goal mode.
+func (c *Controller) applyPlanExec(input, display string) {
+	todos := c.executor.CanonicalTodoState()
+	if len(todos) == 0 {
+		c.notice("no active plan with todos to execute")
+		return
+	}
+
+	// Parse --strict flag.
+	strict := false
+	fields := strings.Fields(input)
+	for _, f := range fields {
+		if f == "--strict" {
+			strict = true
+			break
+		}
+	}
+
+	// Count completion status.
+	total := len(todos)
+	done := 0
+	for _, t := range todos {
+		if t.Status == "completed" {
+			done++
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("You are the execution conductor. Route each step to the right sub-agent by module.\n\n")
+
+	// Detect project structure for module-aware routing.
+	modules := c.detectProjectModules()
+	if len(modules) > 0 {
+		b.WriteString("## Project modules detected\n\n")
+		for _, m := range modules {
+			fmt.Fprintf(&b, "- %s/", m)
+		}
+		b.WriteString("\n\nRoute steps to the module they belong to. Steps in different modules can run in parallel.\n\n")
+	}
+
+	b.WriteString("## Plan steps\n\n")
+	for _, t := range todos {
+		status := t.Status
+		if status == "" {
+			status = "pending"
+		}
+		mark := " "
+		if status == "completed" {
+			mark = "x"
+		}
+		fmt.Fprintf(&b, "- [%s] %s (%s)\n", mark, t.Content, status)
+	}
+	b.WriteString("\n## Routing rules\n")
+	b.WriteString("1. Group steps by MODULE \u2014 same module = serial, different modules = parallel batches\n")
+	b.WriteString("2. Research/exploration across modules = use parallel_tasks\n")
+	b.WriteString("3. Dispatch each batch via parallel_tasks \u2014 each sub-agent gets one module\u2019s context\n")
+	b.WriteString("4. Verify each batch before the next\n")
+	b.WriteString("5. Failures: fix before moving on\n")
+	b.WriteString("\nGoal: each sub-agent focuses on one module and does not carry irrelevant context.\n")
+	if done > 0 {
+		fmt.Fprintf(&b, "\nNote: %d/%d steps are already completed. Focus on the remaining %d steps.\n", done, total, total-done)
+	}
+	prompt := b.String()
+
+	// Show module preview.
+	if len(modules) > 0 {
+		c.notice(fmt.Sprintf("plan-exec: detected %d modules — %s", len(modules), strings.Join(modules, ", ")))
+	}
+
+	c.SetPlanMode(false)
+	c.SetGoal("execute plan: " + ShortGoalForNotice(todos[0].Content))
+	c.GoalStrict(strict)
+	c.notice(fmt.Sprintf("plan-exec: dispatching %d plan steps (strict=%v)", total, strict))
+	if c.runner != nil {
+		c.runGuarded(func(ctx context.Context) error {
+			return c.runGoalLoopWithRawDisplay(ctx, prompt, prompt, display)
+		})
+	}
+}
+
+// prometheusPrompt is the strategic planner system prompt.
+const prometheusPrompt = "You are Prometheus, a strategic planner. Interview the user one question at a time. Cover: scope, modules, files, constraints, tests. When ready, output a numbered plan with each step tagged by module. End with [goal:complete]. Do not implement.\n\nFor independent research directions, use parallel_tasks before planning."
+
+// applyPrometheus starts an interactive planning interview, inspired by OMO's
+// Prometheus agent. It enters goal mode with a structured interview prompt.
+func (c *Controller) applyPrometheus(input, display string) {
+	args := strings.TrimSpace(strings.TrimPrefix(input, "/prometheus"))
+	if args == "" || args == "--strict" {
+		c.notice("usage: /prometheus <your task description>")
+		return
+	}
+	strict := false
+	if strings.HasPrefix(args, "--strict ") {
+		strict = true
+		args = strings.TrimPrefix(args, "--strict ")
+	}
+	prompt := prometheusPrompt + "\n\n## User request\n\n" + args + "\n\nBegin the interview by asking your first clarifying question."
+	c.SetPlanMode(false)
+	c.SetGoal("plan: " + ShortGoalForNotice(args))
+	c.GoalStrict(strict)
+	c.notice("prometheus: starting planning interview")
+	if c.runner != nil {
+		c.runGuarded(func(ctx context.Context) error {
+			return c.runGoalLoopWithRawDisplay(ctx, prompt, prompt, display)
+		})
+	}
 }
 
 // shellTimeout is the maximum time a user-invoked "!command" may run. Matches
@@ -1608,6 +1817,7 @@ func (c *Controller) PlanMode() bool {
 func (c *Controller) GoalStrict(strict bool) {
 	c.mu.Lock()
 	c.goalStrict = strict
+	c.saveGoalState()
 	c.mu.Unlock()
 }
 
@@ -1629,6 +1839,12 @@ func (c *Controller) SetGoalWithResearchMode(goal string, researchMode GoalResea
 		c.goalTurns = 0
 		c.goalBlocks = 0
 		c.goalBlock = ""
+		c.goalInterceptMsg = ""
+		c.goalIntercepts = 0
+		c.goalSelfCheckDone = false
+		c.goalIdleTurns = 0
+		c.goalStrict = false
+		c.saveGoalState()
 		return
 	}
 	if c.goal == goal && c.goalStatus == GoalStatusRunning && c.goalResearchMode == researchMode {
@@ -1643,7 +1859,9 @@ func (c *Controller) SetGoalWithResearchMode(goal string, researchMode GoalResea
 	c.goalInterceptMsg = ""
 	c.goalIntercepts = 0
 	c.goalSelfCheckDone = false
+	c.goalIdleTurns = 0
 	c.goalStrict = false
+	c.saveGoalState()
 }
 
 func (c *Controller) ClearGoal() {
@@ -3646,4 +3864,77 @@ func (c *Controller) emitRememberResult(r RememberResult) {
 	case strings.TrimSpace(r.CoveredBy) != "":
 		c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: fmt.Sprintf(i18n.M.PermissionAlreadyAllowedFmt, r.Path, r.CoveredBy)})
 	}
+}
+
+// detectProjectModules scans the workspace root for top-level source directories
+// to enable module-aware task routing in /plan-exec.
+func (c *Controller) detectProjectModules() []string {
+	root := c.sessionDir
+	for i := 0; i < 3 && root != ""; i++ {
+		if hasFile(root, "go.mod") || hasFile(root, "package.json") || hasFile(root, ".git") {
+			return listSourceDirs(root, 2)
+		}
+		root = filepath.Dir(root)
+		if root == filepath.Dir(root) {
+			break
+		}
+	}
+	return nil
+}
+
+func hasFile(dir, name string) bool {
+	_, err := os.Stat(filepath.Join(dir, name))
+	return err == nil
+}
+
+func listSourceDirs(root string, maxDepth int) []string {
+	skip := map[string]bool{
+		".git": true, ".github": true, "node_modules": true,
+		"vendor": true, ".reasonix": true, "desktop": true,
+		"dist": true, "build": true, ".cache": true, "bin": true,
+	}
+	var dirs []string
+	walkDir(root, "", skip, maxDepth, &dirs)
+	return dirs
+}
+
+func walkDir(root, rel string, skip map[string]bool, depth int, out *[]string) {
+	if depth <= 0 {
+		return
+	}
+	dir := root
+	if rel != "" {
+		dir = filepath.Join(root, rel)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() || skip[name] || strings.HasPrefix(name, ".") {
+			continue
+		}
+		childRel := name
+		if rel != "" {
+			childRel = rel + "/" + name
+		}
+		if hasSourceFiles(filepath.Join(root, childRel)) {
+			*out = append(*out, childRel)
+		}
+		walkDir(root, childRel, skip, depth-1, out)
+	}
+}
+
+func hasSourceFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			return true
+		}
+	}
+	return false
 }

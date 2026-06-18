@@ -222,6 +222,24 @@ func TestGoalAutoResearchCanBeForcedOrDisabled(t *testing.T) {
 	}
 }
 
+func TestGoalCommandPreservesResearchModeFlags(t *testing.T) {
+	c := New(Options{})
+	if !c.applyGoalCommand("/goal --research fix the typo", "") {
+		t.Fatal("goal command was not parsed")
+	}
+	if got := c.Compose("start"); !strings.Contains(got, "AutoResearch protocol") {
+		t.Fatalf("/goal --research should force AutoResearch through command dispatch:\n%s", got)
+	}
+
+	c = New(Options{})
+	if !c.applyGoalCommand("/goal --simple 持续排查这个线上卡顿直到根因明确", "") {
+		t.Fatal("goal command was not parsed")
+	}
+	if got := c.Compose("start"); strings.Contains(got, "AutoResearch protocol") {
+		t.Fatalf("/goal --simple should suppress AutoResearch through command dispatch:\n%s", got)
+	}
+}
+
 func TestAutoStartResearchGoalUsesOnlyStrongSignals(t *testing.T) {
 	for _, input := range []string{
 		"持续排查这个线上卡顿直到根因明确，并验证修复",
