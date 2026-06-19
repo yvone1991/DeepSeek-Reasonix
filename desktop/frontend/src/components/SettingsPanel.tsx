@@ -837,10 +837,12 @@ function normalizeDisplayMode(mode: string | undefined): DisplayMode {
   return mode === "standard" || mode === "compact" ? mode : "standard";
 }
 
-type DesktopLayoutStyle = "classic" | "workbench";
+type DesktopLayoutStyle = "classic" | "workbench" | "creation";
 
 function normalizeDesktopLayoutStyle(style: string | undefined): DesktopLayoutStyle {
-  return style === "classic" ? "classic" : "workbench";
+  if (style === "classic") return "classic";
+  if (style === "creation") return "creation";
+  return "workbench";
 }
 
 function desktopLayoutStyleLabel(style: DesktopLayoutStyle, t: ReturnType<typeof useT>): string {
@@ -1110,7 +1112,7 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
       </SettingsField>
       <SettingsField label={t("settings.desktopLayoutStyle")}>
         <div className="set-seg">
-          {(["classic", "workbench"] as const).map((style) => (
+          {(["classic", "workbench", "creation"] as const).map((style) => (
             <button
               key={style}
               className={`set-seg__btn${desktopLayoutStyle === style ? " set-seg__btn--on" : ""}`}
