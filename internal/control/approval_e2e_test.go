@@ -97,8 +97,8 @@ func TestApprovalToolWideEndToEnd(t *testing.T) {
 // (#4626, #4402). Ask shares the same wait context as tool-approval prompts.
 func TestApprovalTimeoutDeniesWhenUnanswered(t *testing.T) {
 	c := New(Options{
-		Policy:         permission.New("ask", nil, nil, nil),
-		Sink:           event.Discard,
+		Policy:          permission.New("ask", nil, nil, nil),
+		Sink:            event.Discard,
 		ApprovalTimeout: 40 * time.Millisecond,
 	})
 	c.EnableInteractiveApproval()

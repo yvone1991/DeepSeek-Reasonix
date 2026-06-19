@@ -19,9 +19,9 @@ import (
 
 // GatewayConfig 是 BotGateway 的配置。
 type GatewayConfig struct {
-	Model              string
-	ToolApprovalMode   string
-	MaxSteps           int
+	Model            string
+	ToolApprovalMode string
+	MaxSteps         int
 	// ApprovalTimeout bounds how long a tool-approval/ask prompt blocks a bot
 	// session waiting for a remote user's reply. Zero falls back to
 	// defaultBotApprovalTimeout so an abandoned prompt can't wedge the bot forever
