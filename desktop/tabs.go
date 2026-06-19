@@ -4519,9 +4519,9 @@ type sessionListCacheEntry struct {
 }
 
 type sessionListCache struct {
-	mu     sync.Mutex
-	byDir  map[string]sessionListCacheEntry
-	dirty  atomic.Bool // set true on tree change, cleared on first re-read
+	mu    sync.Mutex
+	byDir map[string]sessionListCacheEntry
+	dirty atomic.Bool // set true on tree change, cleared on first re-read
 }
 
 func (c *sessionListCache) get(dir string) ([]agent.SessionInfo, map[string]string, bool) {
@@ -4598,7 +4598,7 @@ func mergeSessionInfos(dir string, infos []agent.SessionInfo, titles map[string]
 
 type sessionDiskCache struct {
 	mu    sync.Mutex
-	path  string               // cache file path
+	path  string                // cache file path
 	cache *sessionDiskCacheData // nil = not loaded / stale
 }
 
