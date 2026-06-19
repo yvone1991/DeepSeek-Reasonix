@@ -123,6 +123,7 @@ const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((modu
 const SIDEBAR_COLLAPSED_KEY = "reasonix.sidebar.collapsed";
 const SIDEBAR_DEFAULT_WIDTH = 264;
 const SIDEBAR_MIN_WIDTH = 264;
+const CREATION_SIDEBAR_MIN_WIDTH = 236;
 const SIDEBAR_MAX_WIDTH = 300;
 const SIDEBAR_VIEWPORT_RATIO = 0.18;
 const CHAT_MIN_WIDTH = 400;
@@ -618,6 +619,10 @@ function activeTopicTurnsFromTree(tree: ProjectNode[], tab?: TabMeta): number | 
 
 function clampSidebarWidth(width: number): number {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
+function clampCreationSidebarWidth(width: number): number {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(CREATION_SIDEBAR_MIN_WIDTH, Math.round(width)));
 }
 
 function clampRightDockPreviewWidth(width: number): number {
@@ -1674,12 +1679,15 @@ export default function App() {
     saveSidebarCollapsed(nextCollapsed);
   }, [anchorAppScrollToChat, closeTransientOverlays, pulseSidebarToggle, sidebarCollapsed]);
 
+  const sidebarWidthClamp = desktopLayoutStyle === "creation" ? clampCreationSidebarWidth : clampSidebarWidth;
+  const sidebarResizeMinWidth = desktopLayoutStyle === "creation" ? CREATION_SIDEBAR_MIN_WIDTH : SIDEBAR_MIN_WIDTH;
+
   const setExpandedSidebarWidth = useCallback((width: number) => {
     closeTransientOverlays();
-    const next = clampSidebarWidth(width);
+    const next = sidebarWidthClamp(width);
     setSidebarWidth(next);
     saveSidebarWidth(next);
-  }, [closeTransientOverlays]);
+  }, [closeTransientOverlays, sidebarWidthClamp]);
 
   const startSidebarResize = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -1689,7 +1697,7 @@ export default function App() {
       setSidebarResizing(true);
       let nextWidth = sidebarWidth;
       const onMove = (moveEvent: PointerEvent) => {
-        nextWidth = clampSidebarWidth(moveEvent.clientX);
+        nextWidth = sidebarWidthClamp(moveEvent.clientX);
         setSidebarWidth(nextWidth);
       };
       const onDone = () => {
@@ -1708,7 +1716,7 @@ export default function App() {
       window.addEventListener("pointerup", onDone);
       window.addEventListener("pointercancel", onDone);
     },
-    [closeTransientOverlays, sidebarCollapsed, sidebarWidth],
+    [closeTransientOverlays, sidebarCollapsed, sidebarWidth, sidebarWidthClamp],
   );
 
   const resizeSidebarWithKeyboard = useCallback(
@@ -1719,13 +1727,13 @@ export default function App() {
         setExpandedSidebarWidth(sidebarWidth + (event.key === "ArrowRight" ? 16 : -16));
       } else if (event.key === "Home") {
         event.preventDefault();
-        setExpandedSidebarWidth(SIDEBAR_MIN_WIDTH);
+        setExpandedSidebarWidth(sidebarResizeMinWidth);
       } else if (event.key === "End") {
         event.preventDefault();
         setExpandedSidebarWidth(SIDEBAR_MAX_WIDTH);
       }
     },
-    [setExpandedSidebarWidth, sidebarCollapsed, sidebarWidth],
+    [setExpandedSidebarWidth, sidebarCollapsed, sidebarWidth, sidebarResizeMinWidth],
   );
 
   const setSavedWorkspacePanelWidth = useCallback(
@@ -2681,7 +2689,7 @@ export default function App() {
           role="separator"
           aria-orientation="vertical"
           aria-label={t("sidebar.resize")}
-          aria-valuemin={SIDEBAR_MIN_WIDTH}
+          aria-valuemin={sidebarResizeMinWidth}
           aria-valuemax={SIDEBAR_MAX_WIDTH}
           aria-valuenow={sidebarWidth}
           onPointerDown={startSidebarResize}
@@ -2932,6 +2940,7 @@ export default function App() {
                 rewindDisabled={Boolean(activeTab?.readOnly) || rewindState != null || state.running || state.messageAction != null || state.approval != null || state.ask != null || clearContextPending}
                 running={state.running}
                 welcomeVariant={sidebarCreation ? "creation" : "default"}
+                actionHoverMenus={sidebarCreation}
                 rewindSignal={rewindSignal}
               />
             )}

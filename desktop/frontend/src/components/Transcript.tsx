@@ -86,6 +86,7 @@ export function Transcript({
   running = false,
   questionNavigator = true,
   welcomeVariant = "default",
+  actionHoverMenus = false,
   rewindSignal = 0,
 }: {
   items: Item[];
@@ -101,6 +102,7 @@ export function Transcript({
   running?: boolean;
   questionNavigator?: boolean;
   welcomeVariant?: "default" | "creation";
+  actionHoverMenus?: boolean;
   rewindSignal?: number;
 }) {
   const {
@@ -359,6 +361,7 @@ export function Transcript({
           checkpoint={checkpointsByTurn.get(turn)}
           actionPending={actionPending}
           rewindDisabled={rewindDisabled}
+          hoverMenus={actionHoverMenus}
           onRewind={(targetTurn, scope) => {
             onRewind?.(targetTurn, scope);
             setOpenAction(null);
@@ -539,7 +542,7 @@ export function Transcript({
       if (!running) pushTurnActions();
     }
     return out;
-  }, [hotStartIdx, items, openAction, actionPending, rewindDisabled, running, onEditPrompt, onRewind, subcallsByParent, userTurn, checkpointsByTurn, displayMode, stepGroups, tabId]);
+  }, [hotStartIdx, items, openAction, actionPending, rewindDisabled, running, onEditPrompt, onRewind, subcallsByParent, userTurn, checkpointsByTurn, displayMode, stepGroups, tabId, actionHoverMenus]);
 
   // ── Assemble rendered output ──────────────────────────────────────────────
   // Warm/cold zone is a separate memo'd WarmZone component so streaming tokens
@@ -572,6 +575,7 @@ export function Transcript({
             warmOpenAction={openAction}
             warmActionPending={actionPending}
             warmRewindDisabled={rewindDisabled}
+            warmActionHoverMenus={actionHoverMenus}
             warmOnRewind={onRewind}
             warmSetOpenAction={setOpenAction}
             warmOnEdit={onEditPrompt}
@@ -611,6 +615,7 @@ const WarmZone = memo(function WarmZone({
   warmOpenAction,
   warmActionPending,
   warmRewindDisabled,
+  warmActionHoverMenus,
   warmOnRewind,
   warmSetOpenAction,
   warmOnEdit,
@@ -630,6 +635,7 @@ const WarmZone = memo(function WarmZone({
   warmOpenAction: OpenTurnAction | null;
   warmActionPending: boolean;
   warmRewindDisabled: boolean;
+  warmActionHoverMenus: boolean;
   warmOnRewind: ((turn: number, scope: string) => void) | undefined;
   warmSetOpenAction: (action: OpenTurnAction | null) => void;
   warmOnEdit?: (turn: number, displayText: string, submitText?: string) => boolean | void | Promise<boolean | void>;
@@ -686,6 +692,7 @@ const WarmZone = memo(function WarmZone({
               openAction={warmOpenAction}
               actionPending={warmActionPending}
               rewindDisabled={warmRewindDisabled}
+              actionHoverMenus={warmActionHoverMenus}
               onRewind={warmOnRewind}
               setOpenAction={warmSetOpenAction}
               onEdit={warmOnEdit}
@@ -731,6 +738,7 @@ function WarmTurnItems({
   openAction,
   actionPending,
   rewindDisabled,
+  actionHoverMenus,
   onRewind,
   setOpenAction,
   onEdit,
@@ -745,6 +753,7 @@ function WarmTurnItems({
   openAction: OpenTurnAction | null;
   actionPending: boolean;
   rewindDisabled: boolean;
+  actionHoverMenus: boolean;
   onRewind: ((turn: number, scope: string) => void) | undefined;
   setOpenAction: (action: OpenTurnAction | null) => void;
   onEdit?: (turn: number, displayText: string, submitText?: string) => boolean | void | Promise<boolean | void>;
@@ -768,6 +777,7 @@ function WarmTurnItems({
         checkpoint={checkpoints.get(turn)}
         actionPending={actionPending}
         rewindDisabled={rewindDisabled}
+        hoverMenus={actionHoverMenus}
         onRewind={(targetTurn, scope) => {
           onRewind?.(targetTurn, scope);
           setOpenAction(null);

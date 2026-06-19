@@ -22250,10 +22250,16 @@ a[href] {
 
 .app--creation .layout--creation-chrome-hidden .sidebar,
 .app--creation .layout--creation-chrome-hidden .chat-pane,
+.app--creation .layout--creation-chrome-hidden .sidebar-resizer,
 .app--creation .layout--creation-chrome-hidden .workspace-panel-resizer,
 .app--creation .layout--creation-chrome-hidden .context-inspector,
 .app--creation .layout--creation-chrome-hidden .workbench-dock {
   grid-row: 1;
+}
+
+.app--creation .layout--creation-chrome-hidden .sidebar-resizer,
+:root[data-theme-style] .app--creation .layout--creation-chrome-hidden .sidebar-resizer {
+  top: 0;
 }
 
 .app--creation .topicbar,
@@ -23313,10 +23319,18 @@ a[href] {
 }
 
 .app--creation .sidebar-resizer::after,
+:root[data-theme-style] .app--creation .sidebar-resizer::after {
+  background: color-mix(in srgb, var(--fg-faint) 14%, transparent);
+  box-shadow: none;
+}
+
 .app--creation .sidebar-resizer:hover::after,
 .app--creation .sidebar-resizer:focus-visible::after,
-.app--creation .layout--sidebar-resizing .sidebar-resizer::after {
-  background: transparent;
+.app--creation .layout--sidebar-resizing .sidebar-resizer::after,
+:root[data-theme-style] .app--creation .sidebar-resizer:hover::after,
+:root[data-theme-style] .app--creation .sidebar-resizer:focus-visible::after,
+:root[data-theme-style] .app--creation .layout--sidebar-resizing .sidebar-resizer::after {
+  background: color-mix(in srgb, var(--accent) 42%, transparent);
   box-shadow: none;
 }
 
@@ -23378,6 +23392,194 @@ a[href] {
 .app--creation .transcript--empty > .welcome--creation {
   margin-block: 0;
   margin-inline: 0;
+}
+
+.app--creation .msg--user:not(.msg--im-source) .msg__body:not(.msg__body--editing),
+:root[data-theme-style] .app--creation .msg--user:not(.msg--im-source) .msg__body:not(.msg__body--editing) {
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 14px;
+  background: var(--accent);
+  color: #fff;
+  box-shadow: none;
+}
+
+.app--creation .msg--user:not(.msg--im-source) .msg__body:not(.msg__body--editing)::after,
+:root[data-theme-style] .app--creation .msg--user:not(.msg--im-source) .msg__body:not(.msg__body--editing)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -7px;
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border-radius: 3px 2px 3px 0;
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.app--creation .msg--user:not(.msg--im-source) .msg__text,
+:root[data-theme-style] .app--creation .msg--user:not(.msg--im-source) .msg__text {
+  color: #fff;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.app--creation .msg-meta,
+:root[data-theme-style] .app--creation .msg-meta {
+  min-height: 22px;
+  margin-top: 5px;
+  margin-right: 4px;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 0.14s, transform 0.14s;
+}
+
+.app--creation .msg--user:hover .msg-meta,
+.app--creation .msg--user:focus-within .msg-meta,
+:root[data-theme-style] .app--creation .msg--user:hover .msg-meta,
+:root[data-theme-style] .app--creation .msg--user:focus-within .msg-meta {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.app--creation .msg-meta__btn,
+.app--creation .msg-meta .copybtn,
+:root[data-theme-style] .app--creation .msg-meta__btn,
+:root[data-theme-style] .app--creation .msg-meta .copybtn {
+  width: 22px;
+  height: 22px;
+  color: color-mix(in srgb, var(--fg-dim) 78%, transparent);
+  background: transparent;
+}
+
+.app--creation .msg--assistant:has(+ .turn-actions),
+:root[data-theme-style] .app--creation .msg--assistant:has(+ .turn-actions) {
+  margin-bottom: 0;
+}
+
+.app--creation .reasoning__head,
+:root[data-theme-style] .app--creation .reasoning__head {
+  gap: 4px;
+  padding: 0;
+  color: color-mix(in srgb, var(--fg-dim) 72%, transparent);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.app--creation .reasoning__head > svg:first-child,
+.app--creation .reasoning__meta,
+:root[data-theme-style] .app--creation .reasoning__head > svg:first-child,
+:root[data-theme-style] .app--creation .reasoning__meta {
+  display: none;
+}
+
+.app--creation .reasoning__head > span:first-of-type,
+:root[data-theme-style] .app--creation .reasoning__head > span:first-of-type {
+  font-size: 0;
+}
+
+.app--creation .reasoning__head > span:first-of-type::before,
+:root[data-theme-style] .app--creation .reasoning__head > span:first-of-type::before {
+  content: "深度思考";
+  font-size: 13px;
+}
+
+.app--creation .turn-actions,
+:root[data-theme-style] .app--creation .turn-actions {
+  width: max-content;
+  max-width: 100%;
+  gap: 2px;
+  min-height: 24px;
+  margin-left: -4px;
+  margin-top: 0;
+  padding: 8px 0 0;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 0.14s, transform 0.14s;
+  pointer-events: none;
+}
+
+.app--creation .msg--assistant:hover + .turn-actions,
+.app--creation .turn-actions:hover,
+.app--creation .turn-actions:focus-within,
+.app--creation .turn-actions--open,
+:root[data-theme-style] .app--creation .msg--assistant:hover + .turn-actions,
+:root[data-theme-style] .app--creation .turn-actions:hover,
+:root[data-theme-style] .app--creation .turn-actions:focus-within,
+:root[data-theme-style] .app--creation .turn-actions--open {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.app--creation .turn-actions .copybtn,
+.app--creation .turn-actions__btn,
+:root[data-theme-style] .app--creation .turn-actions .copybtn,
+:root[data-theme-style] .app--creation .turn-actions__btn {
+  width: 28px;
+  min-width: 28px;
+  height: 24px;
+  min-height: 24px;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: color-mix(in srgb, var(--fg-dim) 72%, transparent);
+  box-shadow: none;
+}
+
+.app--creation .turn-actions .copybtn__label-inline,
+.app--creation .turn-actions__btn span,
+.app--creation .turn-actions__btn svg:last-child,
+:root[data-theme-style] .app--creation .turn-actions .copybtn__label-inline,
+:root[data-theme-style] .app--creation .turn-actions__btn span,
+:root[data-theme-style] .app--creation .turn-actions__btn svg:last-child {
+  display: none;
+}
+
+.app--creation .turn-actions .copybtn:hover,
+.app--creation .turn-actions .copybtn:focus-visible,
+.app--creation .turn-actions__btn:hover:not(:disabled),
+.app--creation .turn-actions__btn:focus-visible:not(:disabled),
+.app--creation .turn-actions__group--open .turn-actions__btn,
+:root[data-theme-style] .app--creation .turn-actions .copybtn:hover,
+:root[data-theme-style] .app--creation .turn-actions .copybtn:focus-visible,
+:root[data-theme-style] .app--creation .turn-actions__btn:hover:not(:disabled),
+:root[data-theme-style] .app--creation .turn-actions__btn:focus-visible:not(:disabled),
+:root[data-theme-style] .app--creation .turn-actions__group--open .turn-actions__btn {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--fg);
+}
+
+.app--creation .turn-actions__btn:disabled,
+:root[data-theme-style] .app--creation .turn-actions__btn:disabled {
+  opacity: 0.38;
+}
+
+.app--creation .turn-actions__btn--confirm,
+:root[data-theme-style] .app--creation .turn-actions__btn--confirm {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.app--creation .turn-actions__menu,
+:root[data-theme-style] .app--creation .turn-actions__menu {
+  bottom: 100%;
+  min-width: 190px;
+  padding: 5px;
+  border-color: color-mix(in srgb, var(--fg-faint) 18%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-elev) 92%, transparent);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
+}
+
+.app--creation .turn-actions__menu button,
+:root[data-theme-style] .app--creation .turn-actions__menu button {
+  min-height: 28px;
+  padding: 6px 8px;
+  border-radius: 7px;
 }
 
 .app--creation .welcome--creation {
