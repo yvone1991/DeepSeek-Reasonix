@@ -2697,7 +2697,7 @@ export default function App() {
           </button>
         )}
 
-        <section className="chat-pane">
+        <section className={`chat-pane${sidebarCreation && !sessionHasContent ? " chat-pane--creation-empty" : ""}`}>
           <>
           <header className="topicbar">
             {workbenchChromeHidden && (
