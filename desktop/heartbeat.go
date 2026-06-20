@@ -27,17 +27,17 @@ import (
 
 // HeartbeatTask defines a single scheduled prompt.
 type HeartbeatTask struct {
-	ID            string `json:"id"`
-	Title         string `json:"title"`    // user-visible label
-	Prompt        string `json:"prompt"`   // the prompt to submit
-	Interval      string `json:"interval"` // e.g. "5m", "1h", "30s"
-	Enabled       bool   `json:"enabled"`
-	Scope         string `json:"scope,omitempty"`         // "global" or "project"
-	WorkspaceRoot string `json:"workspaceRoot,omitempty"` // project root path when scope="project"
-	TopicID       string `json:"topicId,omitempty"`       // created topic, reused on re-run
-	LastRunAt     int64  `json:"lastRunAt,omitempty"`     // unix millis
-	CreatedAt     int64  `json:"createdAt,omitempty"`
-	ApprovalMode    string `json:"approvalMode"`            // "ask" | "auto" | "yolo"; empty defaults to "yolo"
+	ID              string `json:"id"`
+	Title           string `json:"title"`    // user-visible label
+	Prompt          string `json:"prompt"`   // the prompt to submit
+	Interval        string `json:"interval"` // e.g. "5m", "1h", "30s"
+	Enabled         bool   `json:"enabled"`
+	Scope           string `json:"scope,omitempty"`         // "global" or "project"
+	WorkspaceRoot   string `json:"workspaceRoot,omitempty"` // project root path when scope="project"
+	TopicID         string `json:"topicId,omitempty"`       // created topic, reused on re-run
+	LastRunAt       int64  `json:"lastRunAt,omitempty"`     // unix millis
+	CreatedAt       int64  `json:"createdAt,omitempty"`
+	ApprovalMode    string `json:"approvalMode"`              // "ask" | "auto" | "yolo"; empty defaults to "yolo"
 	TimeWindowStart string `json:"timeWindowStart,omitempty"` // "HH:MM" — interval tasks only run after this time (inclusive)
 	TimeWindowEnd   string `json:"timeWindowEnd,omitempty"`   // "HH:MM" — interval tasks only run before this time (exclusive)
 }
