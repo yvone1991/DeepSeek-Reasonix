@@ -561,7 +561,7 @@ function CycleEditor({
   setDraft: (field: keyof HeartbeatTask, value: string | boolean) => void;
 }) {
   const t = useT();
-  const cycleMatch = draft.interval.match(/^(\d+)[smh]\|(daily|weekly|biweekly|monthly|yearly)(?::([^@]*))?(?:@(\d{2}:\d{2}))?$/);
+  const cycleMatch = (draft.interval || "").match(/^(\d+)[smh]\|(daily|weekly|biweekly|monthly|yearly)(?::([^@]*))?(?:@(\d{2}:\d{2}))?$/);
   const [cycleType, setCycleType] = useState<string>(
     cycleMatch ? cycleMatch[2] : "daily"
   );
@@ -931,12 +931,12 @@ function TaskEditor({
             <input
               className="heartbeat-editor__freq-input"
               value={(() => {
-                const m = draft.interval.match(/^(\d+)/);
+                const m = (draft.interval || "").match(/^(\d+)/);
                 return m ? m[1] : "1";
               })()}
               onChange={(e) => {
                 const num = e.target.value.replace(/\D/g, "");
-                const mUnit = draft.interval.match(/^(\d+)([smh])/);
+                const mUnit = (draft.interval || "").match(/^(\d+)([smh])/);
                 const unit = mUnit ? mUnit[2] : "h";
                 // Guard: never save a bare unit string like "h" or "m"
                 setDraft((prev) => ({ ...prev, interval: num ? num + unit : "1" + unit }));
@@ -946,11 +946,11 @@ function TaskEditor({
             <select
               className="heartbeat-editor__freq-select"
               value={(() => {
-                const m = draft.interval.match(/^(\d+)([smh])/);
+                const m = (draft.interval || "").match(/^(\d+)([smh])/);
                 return m ? m[2] : "h";
               })()}
               onChange={(e) => {
-                const num = draft.interval.match(/^(\d+)/)?.[1] || "1";
+                const num = (draft.interval || "").match(/^(\d+)/)?.[1] || "1";
                 setDraft((prev) => ({ ...prev, interval: num + e.target.value }));
               }}
             >
