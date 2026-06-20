@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -114,4 +115,71 @@ func writeSyntheticSessions(t *testing.T, dir string, n, turns int) int64 {
 		}
 	}
 	return total
+}
+
+// TestColdStartProjectTreeManual measures the steady-state cold-start cost that
+// remains AFTER removing the desktop project-session-cache.json disk cache: a
+// heavy user spread across many workspaces, every session already carrying
+// sidecar Turns/Preview. It mirrors ListProjectTree's per-dir fan-out. The point
+// is to confirm the disk cache is now redundant — sidecar-only listing of the
+// whole tree is already in the low-millisecond range on cold start.
+//
+//	REASONIX_BENCH=1 go test ./internal/agent -run TestColdStartProjectTreeManual -v
+func TestColdStartProjectTreeManual(t *testing.T) {
+	if os.Getenv("REASONIX_BENCH") != "1" {
+		t.Skip("set REASONIX_BENCH=1 to run the cold-start benchmark")
+	}
+
+	const (
+		workspaces = 15
+		perDir     = 200
+		turns      = 25
+	)
+	root := t.TempDir()
+	dirs := make([]string, workspaces)
+	var onDisk int64
+	for w := range workspaces {
+		dir := filepath.Join(root, fmt.Sprintf("ws-%02d", w))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		dirs[w] = dir
+		onDisk += writeSyntheticSessions(t, dir, perDir, turns)
+		// Warm the sidecars (Turns/Preview), i.e. the steady state a real user is
+		// in after the one-time backfill — this is what cold start reads.
+		if _, err := ListSessions(dir); err != nil {
+			t.Fatalf("warm ListSessions: %v", err)
+		}
+	}
+
+	// Sequential cold start (sum over dirs).
+	start := time.Now()
+	seqTotal := 0
+	for _, dir := range dirs {
+		infos, err := ListSessions(dir)
+		if err != nil {
+			t.Fatalf("ListSessions: %v", err)
+		}
+		seqTotal += len(infos)
+	}
+	seqDur := time.Since(start)
+
+	// Concurrent fan-out, the way ListProjectTree actually loads dirs.
+	start = time.Now()
+	var wg sync.WaitGroup
+	counts := make([]int, len(dirs))
+	for i, dir := range dirs {
+		wg.Add(1)
+		go func(i int, dir string) {
+			defer wg.Done()
+			infos, _ := ListSessions(dir)
+			counts[i] = len(infos)
+		}(i, dir)
+	}
+	wg.Wait()
+	concDur := time.Since(start)
+
+	t.Logf("workspaces=%d sessions/dir=%d totalSessions=%d onDisk=%.0fMB | cold start sequential=%v | cold start concurrent(fan-out)=%v",
+		workspaces, perDir, seqTotal, float64(onDisk)/(1<<20),
+		seqDur.Round(time.Millisecond), concDur.Round(time.Millisecond))
 }
