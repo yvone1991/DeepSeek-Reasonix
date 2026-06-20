@@ -437,12 +437,8 @@ function TaskCard({
       const timeStr = time ? ` ${time}` : "";
       if (type === "daily") return `每天${timeStr}`;
       if (type === "weekly" || type === "biweekly") {
-        const dayLabels: Record<string, string> = { mon: "一", tue: "二", wed: "三", thu: "四", fri: "五", sat: "六", sun: "日" };
-        const daysStr = days
-          ? days.split(",").map((d) => `周${dayLabels[d.trim()] || d.trim()}`).join("/")
-          : "每天";
         const prefix = type === "biweekly" ? "每两周" : "每周";
-        return `${prefix} ${daysStr}${timeStr}`;
+        return `${prefix}${timeStr}`;
       }
       if (type === "monthly") return `每月${days ? ` ${days}日` : ""}${timeStr}`;
       if (type === "yearly") {
