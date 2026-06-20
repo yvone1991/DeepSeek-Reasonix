@@ -11,14 +11,15 @@ import (
 )
 
 type Task struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Prompt    string `json:"prompt"`
-	Interval  string `json:"interval"`
-	Enabled   bool   `json:"enabled"`
-	TopicID   string `json:"topicId,omitempty"`
-	LastRunAt int64  `json:"lastRunAt,omitempty"`
-	CreatedAt int64  `json:"createdAt,omitempty"`
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	Prompt       string `json:"prompt"`
+	Interval     string `json:"interval"`
+	Enabled      bool   `json:"enabled"`
+	TopicID      string `json:"topicId,omitempty"`
+	LastRunAt    int64  `json:"lastRunAt,omitempty"`
+	CreatedAt    int64  `json:"createdAt,omitempty"`
+	ApprovalMode string `json:"approvalMode,omitempty"`
 }
 
 func main() {
