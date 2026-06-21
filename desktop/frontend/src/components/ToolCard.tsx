@@ -142,6 +142,12 @@ export const ToolCard = memo(function ToolCard({ item, subcalls, tabId }: { item
             <ChevronRight size={12} />
           </span>
         )}
+        {item.status !== "running" && (
+          <span
+            className={`tool__dot${item.status === "done" ? " tool__dot--ok" : ""}${item.status === "error" ? " tool__dot--err" : ""}${item.status === "stopped" ? " tool__dot--stopped" : ""}`}
+            aria-hidden="true"
+          />
+        )}
       </button>
 
       <div ref={toolBodyRef} className="tool__body">

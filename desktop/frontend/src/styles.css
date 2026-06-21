@@ -4636,6 +4636,10 @@ a[href] {
 .tool__status-icon--stopped {
   color: var(--fg-faint);
 }
+/* 圆点状态指示（Creation 用）；classic/workbench 默认隐藏，无影响。 */
+.tool__dot {
+  display: none;
+}
 .tool__meta {
   margin-left: auto;
   display: flex;
@@ -24501,6 +24505,162 @@ a[href] {
 :root[data-theme-style] .app--creation .readonly-batch > .reasoning__head > .reasoning__chevron,
 :root[data-theme-style] .app--creation .turn-collapse > .reasoning__head > .reasoning__chevron {
   order: 2;
+}
+
+/* ── Creation: 工具信息流 ───────────────────────────────────────────────────
+   状态圆点替代左侧文字图标（done=绿 / error=红 / stopped=橙 / running 无点）；
+   圆点置于工具头最右端（折叠箭头之后）。classic/workbench 下圆点默认隐藏，
+   左侧文字图标不变，零影响。 */
+
+.app--creation .tool__status-icon,
+:root[data-theme-style] .app--creation .tool__status-icon {
+  display: none;
+}
+
+.app--creation .tool__dot,
+:root[data-theme-style] .app--creation .tool__dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--fg-faint);
+}
+
+.app--creation .tool__dot--ok,
+:root[data-theme-style] .app--creation .tool__dot--ok {
+  background: var(--ok);
+}
+
+.app--creation .tool__dot--err,
+:root[data-theme-style] .app--creation .tool__dot--err {
+  background: var(--err);
+}
+
+.app--creation .tool__dot--stopped,
+:root[data-theme-style] .app--creation .tool__dot--stopped {
+  background: var(--warn);
+}
+
+/* 工具头与深度思考头左对齐：reasoning__head 在 Creation 下 padding:0，
+   tool__head 仍是基础规则的 3px 8px，导致左右各多 8px。这里对齐到 0。 */
+.app--creation .tool__head,
+:root[data-theme-style] .app--creation .tool__head {
+  padding: 0;
+}
+
+/* 工具头与深度思考头对齐：reasoning__head 在 Creation 下 padding:0（flush），
+   tool__head 默认 padding:3px 8px 会比思考头左右各多 8px，导致层级错位。
+   Creation 下统一为 0，与 reasoning__head 同起点。 */
+.app--creation .tool__head,
+:root[data-theme-style] .app--creation .tool__head {
+  padding: 0;
+}
+
+/* 移除非思考卡片的左侧竖线（思考模式 .reasoning__body 保留）。
+   readonly-batch__body / turn-collapse__body / tool__body 的 border-left 统一去掉。 */
+.app--creation .tool__body,
+.app--creation .readonly-batch__body,
+.app--creation .turn-collapse__body,
+:root[data-theme-style] .app--creation .tool__body,
+:root[data-theme-style] .app--creation .readonly-batch__body,
+:root[data-theme-style] .app--creation .turn-collapse__body {
+  border-left: none;
+  padding-left: 0;
+}
+
+/* 限制工具头标题宽度，给右侧 meta（耗时/箭头/圆点）留出可见空间。
+   Bash 等命令常超长，不限宽会把箭头和圆点挤出视野。仅 Creation 作用域。
+   summary 在 Creation 下直接隐藏——它对 bash 只是"N 行"摘要，信息量低，
+   留着反而挤占右侧关键元素。 */
+.app--creation .tool__subject,
+:root[data-theme-style] .app--creation .tool__subject {
+  flex: 0 1 auto;
+  max-width: 55ch;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app--creation .tool__summary,
+:root[data-theme-style] .app--creation .tool__summary {
+  display: none;
+}
+
+/* 工具信息流统一思源黑体：工具头全部元素 + 工具体代码/文本。
+   仅 .app--creation 作用域，不改全局 --font-ui token。 */
+.app--creation .tool,
+.app--creation .tool__head,
+.app--creation .tool__name,
+.app--creation .tool__subject,
+.app--creation .tool__summary,
+.app--creation .tool__duration,
+.app--creation .tool__profile,
+.app--creation .tool__nested-count,
+.app--creation .tool__body,
+.app--creation .readonly-batch,
+.app--creation .readonly-batch__label,
+.app--creation .turn-collapse,
+.app--creation .turn-collapse__label,
+.app--creation .phase,
+.app--creation .notice-line,
+.app--creation .compaction,
+:root[data-theme-style] .app--creation .tool,
+:root[data-theme-style] .app--creation .tool__head,
+:root[data-theme-style] .app--creation .tool__name,
+:root[data-theme-style] .app--creation .tool__subject,
+:root[data-theme-style] .app--creation .tool__summary,
+:root[data-theme-style] .app--creation .tool__duration,
+:root[data-theme-style] .app--creation .tool__profile,
+:root[data-theme-style] .app--creation .tool__nested-count,
+:root[data-theme-style] .app--creation .tool__body,
+:root[data-theme-style] .app--creation .readonly-batch,
+:root[data-theme-style] .app--creation .readonly-batch__label,
+:root[data-theme-style] .app--creation .turn-collapse,
+:root[data-theme-style] .app--creation .turn-collapse__label,
+:root[data-theme-style] .app--creation .phase,
+:root[data-theme-style] .app--creation .notice-line,
+:root[data-theme-style] .app--creation .compaction {
+  font-family: "Source Han Sans CN", "Source Han Sans SC", "Noto Sans CJK SC",
+    "Source Han Sans", "思源黑体", "Source Han Sans HC", "Microsoft YaHei UI",
+    "Microsoft YaHei", sans-serif;
+}
+
+/* 工具卡片内的代码块（命令参数/输出/diff）与 diff 标签、错误/提示统一思源黑体。
+   注意：思源黑体为比例字体，代码列对齐会丢失，但字体风格绝对统一。
+   Noto Sans SC 是思源黑体的开源同源版本，系统已装。 */
+.app--creation .tool__body .code,
+.app--creation .tool__body .code-block,
+.app--creation .tool__difflabel,
+.app--creation .tool__err,
+.app--creation .tool__note,
+.app--creation .tool__showall,
+:root[data-theme-style] .app--creation .tool__body .code,
+:root[data-theme-style] .app--creation .tool__body .code-block,
+:root[data-theme-style] .app--creation .tool__difflabel,
+:root[data-theme-style] .app--creation .tool__err,
+:root[data-theme-style] .app--creation .tool__note,
+:root[data-theme-style] .app--creation .tool__showall {
+  font-family: "Source Han Sans CN", "Source Han Sans SC", "Noto Sans CJK SC",
+    "Noto Sans SC", "Source Han Sans", "思源黑体", "Microsoft YaHei UI",
+    "Microsoft YaHei", sans-serif;
+}
+
+.app--creation .tool__name,
+.app--creation .tool__summary,
+.app--creation .tool__duration,
+.app--creation .tool__profile,
+.app--creation .tool__nested-count,
+:root[data-theme-style] .app--creation .tool__name,
+:root[data-theme-style] .app--creation .tool__summary,
+:root[data-theme-style] .app--creation .tool__duration,
+:root[data-theme-style] .app--creation .tool__profile,
+:root[data-theme-style] .app--creation .tool__nested-count {
+  font-family: "Source Han Sans CN", "Source Han Sans SC", "Noto Sans CJK SC",
+    "Source Han Sans", "思源黑体", "Source Han Sans HC", "Microsoft YaHei UI",
+    "Microsoft YaHei", sans-serif;
 }
 
 .app--creation .turn-actions,
