@@ -715,6 +715,7 @@ func TestServeSessionConfigRejectsBackgroundJobsWhileIdle(t *testing.T) {
 
 	jm := factory.managerAt(t, 0)
 	release := make(chan struct{})
+	var releaseOnce sync.Once
 	started := make(chan struct{})
 	sessionPath := transcriptPath(dir, nr.SessionID)
 	jm.StartForSession(agent.BranchID(sessionPath), "bash", "server", func(ctx context.Context, _ io.Writer) (string, error) {
@@ -727,7 +728,7 @@ func TestServeSessionConfigRejectsBackgroundJobsWhileIdle(t *testing.T) {
 		}
 	})
 	defer func() {
-		close(release)
+		releaseOnce.Do(func() { close(release) })
 		jm.Close()
 	}()
 	select {
@@ -753,6 +754,51 @@ func TestServeSessionConfigRejectsBackgroundJobsWhileIdle(t *testing.T) {
 	}
 	if running := jm.RunningForSession(agent.BranchID(sessionPath)); len(running) != 1 {
 		t.Fatalf("running jobs after rejected switch = %+v, want original job still running", running)
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	_ = jm.WaitForSession(context.Background(), agent.BranchID(sessionPath), nil, 5)
+	if running := jm.RunningForSession(agent.BranchID(sessionPath)); len(running) != 0 {
+		t.Fatalf("running jobs after release = %+v, want none before retry", running)
+	}
+
+	retryResp := client.call(t, "session/set_config_option", SetSessionConfigOptionParams{
+		SessionID: nr.SessionID,
+		ConfigID:  "model",
+		Value:     "pro",
+	})
+	if retryResp.Error != nil {
+		t.Fatalf("retry set_config_option after jobs stopped errored: %+v", retryResp.Error)
+	}
+	var retry SetSessionConfigOptionResult
+	if err := json.Unmarshal(retryResp.Result, &retry); err != nil {
+		t.Fatalf("retry set_config_option result: %v", err)
+	}
+	modelOpt, _ := findConfigOption(retry.ConfigOptions, "model")
+	if modelOpt.CurrentValue != "pro" {
+		t.Fatalf("retry model currentValue = %q, want pro", modelOpt.CurrentValue)
+	}
+	if got := factory.buildCount(); got != 2 {
+		t.Fatalf("build count after retry switch = %d, want rebuild", got)
+	}
+
+	promptCh := client.callAsync("session/prompt", SessionPromptParams{
+		SessionID: nr.SessionID,
+		Prompt:    []ContentBlock{{Type: "text", Text: "after-switch"}},
+	})
+	notifs, resp := drainPrompt(t, client, promptCh)
+	if resp.Error != nil {
+		t.Fatalf("prompt after retry switch errored: %+v", resp.Error)
+	}
+	var usedNewModel bool
+	for _, n := range notifs {
+		if text, ok := messageChunkText(t, n); ok && strings.Contains(text, "pro:after-switch") {
+			usedNewModel = true
+			break
+		}
+	}
+	if !usedNewModel {
+		t.Fatalf("prompt after retry did not use new model; notifications=%+v", notifs)
 	}
 }
 
