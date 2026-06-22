@@ -28,6 +28,10 @@ func TestTaskWarrantsPlanner(t *testing.T) {
 		{reasoningLanguageBlock("en") + "\n\nfix the bug", true},
 		{"fix the bug", true},        // terse, but a work request → still planned
 		{"add a login button", true}, // ditto
+		{"执行修复", true},
+		{"开始迁移", true},
+		{"继续重构", true},
+		{"continue fixing tests", true},
 		{"implement the new caching layer across the backend", true},
 		{"who wrote this file?", false},
 		{"where is the config file?", false},

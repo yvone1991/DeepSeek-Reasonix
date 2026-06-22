@@ -145,6 +145,9 @@ func isContextDependentShortReply(text string) bool {
 		return true
 	}
 	lower := strings.ToLower(text)
+	if containsAny(lower, complexIntentTerms) || containsAny(lower, lowRiskWorkRequestTerms) {
+		return false
+	}
 	if shortContextReplies[lower] {
 		return true
 	}
