@@ -2,6 +2,7 @@ package serve
 
 import (
 	"crypto/hmac"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -10,7 +11,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,6 +44,7 @@ const (
 	tokenByteLen    = 32                  // 256-bit random token
 	sessionDuration = 30 * 24 * time.Hour // how long a password session lasts
 	bcryptCost      = 12                  // bcrypt cost factor
+	pbkdf2Iter      = 4096                // deterministic session-key derivation from password_hash
 )
 
 // NormalizeAuthMode normalizes and validates the serve auth mode.
@@ -179,8 +183,11 @@ func HashPassword(password string) (string, error) {
 
 func sessionKeyForPasswordHash(passwordHash string) []byte {
 	if passwordHash != "" {
-		sum := sha256.Sum256([]byte("reasonix serve session key\x00" + passwordHash))
-		return sum[:]
+		key, err := pbkdf2.Key(sha256.New, passwordHash, []byte("reasonix serve session key"), pbkdf2Iter, 32)
+		if err != nil {
+			panic("serve/auth: pbkdf2 failed: " + err.Error())
+		}
+		return key
 	}
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
@@ -236,12 +243,11 @@ func (ag *authGate) checkToken(w http.ResponseWriter, r *http.Request, next http
 		if subtle.ConstantTimeCompare([]byte(q), []byte(ag.token)) == 1 {
 			// Set a persistent cookie so future requests (including SSE) are
 			// authenticated without the token in the URL.
-			http.SetCookie(w, &http.Cookie{
+			ag.setAuthCookie(w, r, &http.Cookie{
 				Name:     cookieToken,
 				Value:    ag.token,
 				Path:     "/",
 				HttpOnly: true,
-				Secure:   ag.isTLS(r),
 				SameSite: http.SameSiteLaxMode,
 				MaxAge:   int(sessionDuration.Seconds()),
 			})
@@ -253,7 +259,7 @@ func (ag *authGate) checkToken(w http.ResponseWriter, r *http.Request, next http
 			if cleanURL.RawQuery == "" {
 				cleanURL.RawQuery = ""
 			}
-			http.Redirect(w, r, cleanURL.RequestURI(), http.StatusFound)
+			redirectToSafeTarget(w, r, cleanURL.RequestURI(), http.StatusFound)
 			return
 		}
 	}
@@ -277,13 +283,12 @@ func (ag *authGate) checkSession(w http.ResponseWriter, r *http.Request, next ht
 	// Not authenticated.
 	if acceptsHTML(r) {
 		// Store the original path so we can redirect back after login.
-		dest := r.URL.RequestURI()
-		http.SetCookie(w, &http.Cookie{
+		dest := safeRedirectTarget(r.URL.RequestURI())
+		ag.setAuthCookie(w, r, &http.Cookie{
 			Name:     cookieRedirect,
 			Value:    dest,
 			Path:     "/",
 			HttpOnly: true,
-			Secure:   ag.isTLS(r),
 			SameSite: http.SameSiteLaxMode,
 			MaxAge:   300, // 5 minutes
 		})
@@ -360,21 +365,19 @@ func (ag *authGate) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	session := ag.signSession()
 
 	// Clear the redirect cookie and set the session cookie.
-	http.SetCookie(w, &http.Cookie{
+	ag.setAuthCookie(w, r, &http.Cookie{
 		Name:     cookieRedirect,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   ag.isTLS(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
-	http.SetCookie(w, &http.Cookie{
+	ag.setAuthCookie(w, r, &http.Cookie{
 		Name:     cookieSession,
 		Value:    session,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   ag.isTLS(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(sessionDuration.Seconds()),
 	})
@@ -382,9 +385,70 @@ func (ag *authGate) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	// Redirect to the original destination, or /.
 	dest := "/"
 	if c, err := r.Cookie(cookieRedirect); err == nil && c.Value != "" {
-		dest = c.Value
+		dest = safeRedirectTarget(c.Value)
 	}
-	http.Redirect(w, r, dest, http.StatusFound)
+	redirectToSafeTarget(w, r, dest, http.StatusFound)
+}
+
+func (ag *authGate) setAuthCookie(w http.ResponseWriter, r *http.Request, c *http.Cookie) {
+	c.Secure = ag.authCookieSecure(r)
+	// codeql[go/cookie-secure-not-set] Loopback HTTP serve must keep local browser auth usable; non-loopback HTTP still sets Secure cookies.
+	http.SetCookie(w, c)
+}
+
+func (ag *authGate) authCookieSecure(r *http.Request) bool {
+	if ag.isTLS(r) {
+		return true
+	}
+	host := r.Host
+	if host == "" && r.URL != nil {
+		host = r.URL.Host
+	}
+	return !isLoopbackHost(host)
+}
+
+func safeRedirectTarget(raw string) string {
+	raw = strings.TrimSpace(raw)
+	raw = strings.ReplaceAll(raw, "\\", "/")
+	if i := strings.IndexByte(raw, '#'); i >= 0 {
+		raw = raw[:i]
+	}
+	if raw == "" {
+		return "/"
+	}
+	if raw != "/" && (len(raw) <= 1 || raw[0] != '/' || raw[1] == '/' || raw[1] == '\\') {
+		return "/"
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u == nil || u.IsAbs() || u.Hostname() != "" {
+		return "/"
+	}
+	path := strings.ReplaceAll(u.Path, "\\", "/")
+	if path == "" {
+		return "/"
+	}
+	if path != "/" && (len(path) <= 1 || path[0] != '/' || path[1] == '/' || path[1] == '\\') {
+		return "/"
+	}
+	return u.RequestURI()
+}
+
+func redirectToSafeTarget(w http.ResponseWriter, r *http.Request, raw string, status int) {
+	target := safeRedirectTarget(raw)
+	target = strings.ReplaceAll(target, "\\", "/")
+	u, err := url.Parse(target)
+	if err == nil && u != nil && !u.IsAbs() && u.Hostname() == "" {
+		redirect := u.RequestURI()
+		if redirect == "/" {
+			http.Redirect(w, r, "/", status)
+			return
+		}
+		if len(redirect) > 1 && redirect[0] == '/' && redirect[1] != '/' && redirect[1] != '\\' {
+			http.Redirect(w, r, redirect, status)
+			return
+		}
+	}
+	http.Redirect(w, r, "/", status)
 }
 
 // signSession creates a new HMAC-signed session token valid for sessionDuration.
@@ -506,4 +570,21 @@ func (ag *authGate) isTLS(r *http.Request) bool {
 		return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 	}
 	return false
+}
+
+func isLoopbackHost(hostport string) bool {
+	hostport = strings.TrimSpace(hostport)
+	if hostport == "" {
+		return false
+	}
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

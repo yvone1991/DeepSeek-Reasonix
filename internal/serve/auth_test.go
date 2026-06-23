@@ -188,6 +188,62 @@ func TestTokenModeValidQueryParamRedirects(t *testing.T) {
 	}
 }
 
+func TestTokenModeLoopbackCookieAllowsLocalHTTP(t *testing.T) {
+	ag := newAuthGate(config.ServeConfig{AuthMode: "token", Token: "secret"})
+	ts := httptest.NewServer(ag.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+	defer ts.Close()
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get(ts.URL + "/?token=secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	c := findCookie(resp.Cookies(), cookieToken)
+	if c == nil {
+		t.Fatal("token cookie missing")
+	}
+	if c.Secure {
+		t.Fatal("loopback HTTP token cookie should stay usable without Secure")
+	}
+}
+
+func TestTokenModeNonLoopbackCookieIsSecure(t *testing.T) {
+	ag := newAuthGate(config.ServeConfig{AuthMode: "token", Token: "secret"})
+	ts := httptest.NewServer(ag.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+	defer ts.Close()
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	req, _ := http.NewRequest("GET", ts.URL+"/?token=secret", nil)
+	req.Host = "192.0.2.10:8787"
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	c := findCookie(resp.Cookies(), cookieToken)
+	if c == nil {
+		t.Fatal("token cookie missing")
+	}
+	if !c.Secure {
+		t.Fatal("non-loopback token cookie must be Secure")
+	}
+}
+
 func TestTokenModeInvalidQueryParam(t *testing.T) {
 	ag := newAuthGate(config.ServeConfig{AuthMode: "token", Token: "secret"})
 	ts := httptest.NewServer(ag.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -329,6 +385,36 @@ func TestPasswordModeValidLogin(t *testing.T) {
 	resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Errorf("authenticated status = %d, want 200", resp2.StatusCode)
+	}
+}
+
+func TestPasswordModeSanitizesRedirectCookie(t *testing.T) {
+	ag := newAuthGate(config.ServeConfig{AuthMode: "password", PasswordHash: mustHash("correct")})
+	ts := httptest.NewServer(ag.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+	defer ts.Close()
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	form := url.Values{"password": {"correct"}}
+	req, _ := http.NewRequest("POST", ts.URL+"/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(&http.Cookie{Name: cookieRedirect, Value: "//evil.example/path"})
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Errorf("login status = %d, want 302", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "/" {
+		t.Fatalf("redirect location = %q, want /", loc)
 	}
 }
 
@@ -574,6 +660,49 @@ func TestIsTLSTrustsForwardedProtoWithProxy(t *testing.T) {
 	}
 }
 
+func TestAuthCookieSecurePolicy(t *testing.T) {
+	ag := newAuthGate(config.ServeConfig{AuthMode: "token", Token: "x"})
+	for _, host := range []string{"localhost:8787", "127.0.0.1:8787", "[::1]:8787"} {
+		req, _ := http.NewRequest("GET", "http://"+host+"/", nil)
+		if ag.authCookieSecure(req) {
+			t.Errorf("loopback host %s should allow local HTTP cookies", host)
+		}
+	}
+
+	req, _ := http.NewRequest("GET", "http://192.0.2.10:8787/", nil)
+	if !ag.authCookieSecure(req) {
+		t.Fatal("non-loopback HTTP cookies should be marked Secure")
+	}
+
+	proxy := newAuthGate(config.ServeConfig{AuthMode: "token", Token: "x", BehindProxy: true})
+	req, _ = http.NewRequest("GET", "http://example.test/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	if !proxy.authCookieSecure(req) {
+		t.Fatal("trusted forwarded HTTPS should mark cookies Secure")
+	}
+}
+
+func TestSafeRedirectTarget(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{"/", "/"},
+		{"/sessions?id=abc#frag", "/sessions?id=abc"},
+		{"", "/"},
+		{"https://evil.example/path", "/"},
+		{"//evil.example/path", "/"},
+		{`/\evil.example/path`, "/"},
+		{"/%2f%2fevil.example/path", "/"},
+		{"/%5cevil.example/path", "/"},
+		{"relative/path", "/"},
+	} {
+		if got := safeRedirectTarget(tc.in); got != tc.want {
+			t.Errorf("safeRedirectTarget(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // ── helpers ──
 
 func mustHash(password string) string {
@@ -582,4 +711,13 @@ func mustHash(password string) string {
 		panic(err)
 	}
 	return h
+}
+
+func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
+	for _, c := range cookies {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
 }
