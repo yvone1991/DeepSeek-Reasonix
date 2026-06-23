@@ -1067,6 +1067,16 @@ export function WorkspacePanel({
   };
 
   const isMarkdown = selectedPath?.toLowerCase().endsWith(".md") ?? false;
+  const codePreviewActive = Boolean(
+    selectedPath &&
+      !changedMode &&
+      preview &&
+      !loadingPreview &&
+      !preview.err &&
+      !preview.kind &&
+      !preview.binary &&
+      !isMarkdown,
+  );
   const treeBlankMenuItems: ContextMenuItem[] = [
     {
       key: "refresh-tree",
@@ -1213,7 +1223,11 @@ export function WorkspacePanel({
           {preview && preview.size > 0 && <span className="workspace-preview__size">{formatBytes(preview.size)}</span>}
         </div>
 
-        <div className="workspace-preview__body" ref={previewBodyRef} onContextMenu={openSelectionMenu}>
+        <div
+          className={`workspace-preview__body${codePreviewActive ? " workspace-preview__body--code" : ""}`}
+          ref={previewBodyRef}
+          onContextMenu={openSelectionMenu}
+        >
           {viewMode === "changed" && scopedChangeRows ? (
             <div className="workspace-change-scope">
               <div className="workspace-change-scope__head">
