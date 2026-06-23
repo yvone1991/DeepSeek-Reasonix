@@ -1218,7 +1218,7 @@ export default function App() {
   const collaborationMode = displayedComposerProfileCollaborationMode(composerProfile);
   const toolApprovalMode = composerProfile.toolApprovalMode;
   const tokenMode: TokenMode = composerProfile.tokenMode;
-  const controllerReady = state.meta?.ready === true;
+  const controllerReady = state.meta?.ready === true && !state.backendActivationPending;
   const patchActiveComposerProfile = useCallback(
     (patch: Partial<Omit<ComposerProfile, "pending">>, pendingFields: ComposerProfileField[]) => {
       if (!activeTabId) return;
@@ -1539,10 +1539,12 @@ export default function App() {
         } else if (["clear", "off", "stop", "done"].includes(displayGoal.toLowerCase())) {
           applyGoal("");
         }
+        if (!controllerReady) return;
         commitThenSend(trimmed, submitText.trim());
         return;
       }
       if (collaborationMode === "goal" && !goal.trim()) {
+        if (!controllerReady) return;
         applyGoal(trimmed);
         commitThenSend(trimmed, `/goal ${submitText.trim()}`);
         return;
@@ -1582,12 +1584,13 @@ export default function App() {
         return;
       }
       if (runningRef.current) { steer(submitText.trim()); return; }
+      if (!controllerReady) return;
       await setControllerCollaborationMode(controllerComposerProfileCollaborationMode(composerProfile));
       await setControllerToolApprovalMode(toolApprovalMode);
       if (goal.trim()) await setControllerGoal(goal);
       commitThenSend(trimmed, submitText.trim());
     },
-    [applyGoal, closeTransientOverlays, collaborationMode, composerProfile, goal, send, runShell, notice, setControllerCollaborationMode, setControllerGoal, setControllerToolApprovalMode, steer, switchModel, t, toolApprovalMode, showToast],
+    [applyGoal, closeTransientOverlays, collaborationMode, composerProfile, controllerReady, goal, send, runShell, notice, setControllerCollaborationMode, setControllerGoal, setControllerToolApprovalMode, steer, switchModel, t, toolApprovalMode, showToast],
   );
 
   const refreshTabMetas = useCallback(async (): Promise<TabMeta[]> => {
@@ -2025,6 +2028,7 @@ export default function App() {
   // send wrapper: commits any pending optimistic rewind before sending.
   const commitThenSend = useCallback(async (displayText: string, submitText?: string) => {
     if (activeTab?.readOnly) return;
+    if (!controllerReady) return;
     const rs = rewindStateRef.current;
     if (rs) {
       rewindStateRef.current = null;
@@ -2050,7 +2054,12 @@ export default function App() {
       }
     }
     send(displayText, submitText);
-  }, [activeTab?.readOnly, send, rewind]);
+  }, [activeTab?.readOnly, controllerReady, send, rewind]);
+
+  const handleTranscriptPrompt = useCallback((text: string) => {
+    if (!controllerReady) return;
+    void commitThenSend(text);
+  }, [commitThenSend, controllerReady]);
 
   const handleMessageAction = useCallback((turn: number, scope: string) => {
     if (activeTab?.readOnly) return;
@@ -2121,7 +2130,7 @@ export default function App() {
 
   const handleEditPrompt = useCallback(async (turn: number, displayText: string, submitText?: string): Promise<boolean> => {
     const sourceTabId = activeTabId;
-    if (!sourceTabId || activeTab?.readOnly || rewindStateRef.current || state.running || state.messageAction != null || state.approval != null || state.ask != null || clearContextPending) return false;
+    if (!sourceTabId || activeTab?.readOnly || !controllerReady || rewindStateRef.current || state.running || state.messageAction != null || state.approval != null || state.ask != null || clearContextPending) return false;
     const next = displayText.trim();
     if (!next) return false;
     const submit = (submitText ?? displayText).trim();
@@ -2130,7 +2139,7 @@ export default function App() {
     setRewindSignal((v) => v + 1);
     sendToTab(sourceTabId, next, submit);
     return true;
-  }, [activeTab?.readOnly, activeTabId, clearContextPending, sendToTab, state.approval, state.ask, state.messageAction, state.running, rewind]);
+  }, [activeTab?.readOnly, activeTabId, clearContextPending, controllerReady, sendToTab, state.approval, state.ask, state.messageAction, state.running, rewind]);
 
   const handleOpenTopic = useCallback(async (scope: string, workspaceRoot: string, topicId: string, sessionPath?: string) => {
     closeTransientOverlays();
@@ -3027,12 +3036,12 @@ export default function App() {
                 live={state.live}
                 tabId={activeTabId}
                 footerHeight={footerHeight}
-                onPrompt={commitThenSend}
+                onPrompt={handleTranscriptPrompt}
                 onEditPrompt={handleEditPrompt}
                 onRewind={handleMessageAction}
                 checkpoints={state.checkpoints}
                 actionPending={state.messageAction != null}
-                rewindDisabled={Boolean(activeTab?.readOnly) || rewindState != null || rewindCommitting || state.running || state.messageAction != null || state.approval != null || state.ask != null || clearContextPending}
+                rewindDisabled={Boolean(activeTab?.readOnly) || !controllerReady || rewindState != null || rewindCommitting || state.running || state.messageAction != null || state.approval != null || state.ask != null || clearContextPending}
                 running={state.running || rewindCommitting}
                 welcomeVariant={sidebarCreation ? "creation" : "default"}
                 creationMode={sidebarCreation}
@@ -3125,9 +3134,9 @@ export default function App() {
               insertRequest={composerInsertRequest}
               readOnly={Boolean(activeTab?.readOnly)}
               disabled={rewindCommitting || state.messageAction != null || state.approval != null || state.ask != null || clearContextPending}
-              submitDisabled={state.meta?.ready !== true}
+              submitDisabled={!controllerReady}
               decisionPending={rewindCommitting || state.messageAction != null || state.approval != null || state.ask != null || clearContextPending}
-              ready={state.meta?.ready === true}
+              ready={controllerReady}
               turnStartAt={state.turnStartAt}
               turnTokens={state.turnTokens}
               retry={state.retry}

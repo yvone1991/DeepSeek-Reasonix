@@ -97,6 +97,7 @@ interface State {
   hydrating: boolean;
   hydrateReason?: HydrateReason;
   hydrateError?: string;
+  backendActivationPending: boolean;
   messageAction?: MessageActionState;
   currentAssistant?: string;
   live?: LiveStream;
@@ -126,6 +127,7 @@ export const initialState: State = {
   jobs: [],
   checkpoints: [],
   hydrating: false,
+  backendActivationPending: false,
   turnStartAt: 0,
   turnTokens: 0,
   turnTotalTokens: 0,
@@ -224,6 +226,15 @@ export function shouldReconcileStaleTurn(
   return Math.max(0, now - lastTurnActivityAt) >= timeoutMs;
 }
 
+function hasCachedLiveTurn(state: State | undefined): boolean {
+  if (!state?.running && !state?.turnActive) return false;
+  if (state.live || state.currentAssistant || state.pendingUser !== undefined) return true;
+  return state.items.some((item) =>
+    (item.kind === "assistant" && item.streaming) ||
+    (item.kind === "tool" && item.status === "running")
+  );
+}
+
 /** Mirrors Go backend's ReadOnly() hints. */
 export function isReadOnlyTool(name: string): boolean {
   switch (name) {
@@ -294,6 +305,8 @@ type Action =
   | { type: "hydrate_start"; reason: HydrateReason }
   | { type: "hydrate_done" }
   | { type: "hydrate_error"; reason: HydrateReason; error: string }
+  | { type: "backend_activation_start" }
+  | { type: "backend_activation_done" }
   | { type: "message_action_start"; action: MessageActionState }
   | { type: "message_action_done" }
   | { type: "history"; messages: HistoryMessage[] }
@@ -745,6 +758,8 @@ export function reducer(s: State, a: Action): State {
     case "hydrate_start": return { ...s, hydrating: true, hydrateReason: a.reason, hydrateError: undefined };
     case "hydrate_done": return s.hydrating || s.hydrateReason || s.hydrateError ? { ...s, hydrating: false, hydrateReason: undefined, hydrateError: undefined } : s;
     case "hydrate_error": return { ...s, hydrating: false, hydrateReason: a.reason, hydrateError: a.error };
+    case "backend_activation_start": return s.backendActivationPending ? s : { ...s, backendActivationPending: true };
+    case "backend_activation_done": return s.backendActivationPending ? { ...s, backendActivationPending: false } : s;
     case "message_action_start": return { ...s, messageAction: a.action };
     case "message_action_done": return { ...s, messageAction: undefined };
     case "history": {
@@ -754,7 +769,7 @@ export function reducer(s: State, a: Action): State {
     case "local_notice": return { ...s, running: false, turnActive: false, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `n${s.seq}`, level: a.level, text: a.text }] };
     case "clearApproval": return { ...s, approval: undefined, pendingPrompt: false };
     case "clearAsk": return { ...s, ask: undefined, pendingPrompt: false };
-    case "reset": return { ...initialState, meta: s.meta, context: { ...s.context, used: 0, sessionTokens: 0 }, balance: s.balance, effort: s.effort, jobs: s.jobs, hydrating: s.hydrating, hydrateReason: s.hydrateReason, hydrateError: s.hydrateError, sessionGen: s.sessionGen + 1 };
+    case "reset": return { ...initialState, meta: s.meta, context: { ...s.context, used: 0, sessionTokens: 0 }, balance: s.balance, effort: s.effort, jobs: s.jobs, hydrating: s.hydrating, hydrateReason: s.hydrateReason, hydrateError: s.hydrateError, backendActivationPending: s.backendActivationPending, sessionGen: s.sessionGen + 1 };
     case "event": return applyEvent(s, a.e);
     default: return s;
   }
@@ -820,6 +835,8 @@ export function useController() {
   // The active tab's current state, with a stable identity for cancel().
   const activeState = activeTabId ? getOrCreateState(statesRef.current, activeTabId) : initialState;
   const stateRef = useRef(activeState);
+  const backendActiveTabIdRef = useRef<string | undefined>(undefined);
+  const backendActivationPromises = useRef(new Map<string, Promise<boolean>>());
   activeTabIdRef.current = activeTabId;
   stateRef.current = activeState;
 
@@ -834,6 +851,29 @@ export function useController() {
       bump();
     }
   }, [bump]);
+
+  const confirmBackendActiveTab = useCallback((tabId: string) => {
+    backendActiveTabIdRef.current = tabId;
+    dispatchTo(tabId, { type: "backend_activation_done" });
+  }, [dispatchTo]);
+
+  const trackBackendActivation = useCallback((tabId: string, promise: Promise<boolean>) => {
+    backendActivationPromises.current.set(tabId, promise);
+    void promise.finally(() => {
+      if (backendActivationPromises.current.get(tabId) === promise) {
+        backendActivationPromises.current.delete(tabId);
+      }
+    });
+  }, []);
+
+  const waitForBackendActiveTab = useCallback(async (tabId: string): Promise<boolean> => {
+    const pending = backendActivationPromises.current.get(tabId);
+    if (pending) {
+      const activated = await pending.catch(() => false);
+      if (!activated) return false;
+    }
+    return backendActiveTabIdRef.current === tabId && activeTabIdRef.current === tabId;
+  }, []);
 
   const checkpointRefreshSeq = useRef(new Map<string, number>());
   const sessionLoadSeq = useRef(new Map<string, number>());
@@ -857,7 +897,12 @@ export function useController() {
     dispatchTo(tabId, { type: "checkpoints", checkpoints: asArray(checkpoints) });
   }, [bumpCheckpointRefreshSeq, dispatchTo]);
 
-  const loadSessionDataForTab = useCallback(async (tabId: string, reset = false, reason: HydrateReason = "startup") => {
+  const loadSessionDataForTab = useCallback(async (
+    tabId: string,
+    reset = false,
+    reason: HydrateReason = "startup",
+    options: { skipHistory?: boolean } = {},
+  ) => {
     const seq = bumpSessionLoadSeq(tabId);
     const hydrateStartedAt = Date.now();
     addBreadcrumb("tab.hydrate", `start ${reason} ${tabId}`);
@@ -886,24 +931,31 @@ export function useController() {
       .catch((err) => noteFailure("jobs", err));
 
     const historyStartedAt = Date.now();
-    const historyTask = app.HistoryForTab(tabId)
-      .then((history) => {
-        if (!stillCurrent()) return;
-        const messages = asArray(history);
-        const reduceStartedAt = Date.now();
-        if (messages.length) dispatchTo(tabId, { type: "history", messages });
-        addBreadcrumb(
-          "tab.hydrate",
-          `history done ${tabId} count=${messages.length} apiMs=${Date.now() - historyStartedAt} reduceMs=${Date.now() - reduceStartedAt}`,
-        );
+    const historyTask = options.skipHistory
+      ? Promise.resolve().then(() => {
+        addBreadcrumb("tab.hydrate", `history skipped ${tabId} reason=cached-live-turn`);
         if (reason === "switch-tab") {
-          addBreadcrumb(
-            "tab.switch",
-            `history-done ${tabId} count=${messages.length} ms=${Date.now() - historyStartedAt}`,
-          );
+          addBreadcrumb("tab.switch", `history-done ${tabId} skipped ms=${Date.now() - historyStartedAt}`);
         }
       })
-      .catch((err) => noteFailure("history", err));
+      : app.HistoryForTab(tabId)
+        .then((history) => {
+          if (!stillCurrent()) return;
+          const messages = asArray(history);
+          const reduceStartedAt = Date.now();
+          if (messages.length) dispatchTo(tabId, { type: "history", messages });
+          addBreadcrumb(
+            "tab.hydrate",
+            `history done ${tabId} count=${messages.length} apiMs=${Date.now() - historyStartedAt} reduceMs=${Date.now() - reduceStartedAt}`,
+          );
+          if (reason === "switch-tab") {
+            addBreadcrumb(
+              "tab.switch",
+              `history-done ${tabId} count=${messages.length} ms=${Date.now() - historyStartedAt}`,
+            );
+          }
+        })
+        .catch((err) => noteFailure("history", err));
     const checkpointsTask = app.CheckpointsForTab(tabId)
       .then((checkpoints) => {
         if (stillCurrent()) dispatchTo(tabId, { type: "checkpoints", checkpoints: asArray(checkpoints) });
@@ -944,10 +996,12 @@ export function useController() {
     const active = await activeTabFromBackend();
     if (!active) return undefined;
     setActiveTabId(active.id);
+    activeTabIdRef.current = active.id;
+    confirmBackendActiveTab(active.id);
     dispatchTo(active.id, { type: "optimistic_meta", meta: metaFromTab(active, statesRef.current.get(active.id)?.meta) });
     await loadSessionDataForTab(active.id, reset, "startup");
     return active.id;
-  }, [activeTabFromBackend, dispatchTo, loadSessionDataForTab]);
+  }, [activeTabFromBackend, confirmBackendActiveTab, dispatchTo, loadSessionDataForTab]);
 
   const reconcileTabRuntime = useCallback(async (
     tabId: string,
@@ -1097,9 +1151,11 @@ export function useController() {
     void activeTabFromBackend().then((active) => {
       if (!active?.id) return;
       setActiveTabId(active.id);
+      activeTabIdRef.current = active.id;
+      confirmBackendActiveTab(active.id);
       sendToTab(active.id, displayText, submitText);
     });
-  }, [activeTabFromBackend, activeTabId, sendToTab]);
+  }, [activeTabFromBackend, activeTabId, confirmBackendActiveTab, sendToTab]);
 
   const runShell = useCallback((command: string) => {
     if (!activeTabId) return;
@@ -1184,6 +1240,7 @@ export function useController() {
 
   const newSession = useCallback(async () => {
     const tabId = activeTabId;
+    if (tabId && !(await waitForBackendActiveTab(tabId))) return;
     if (tabId) {
       addBreadcrumb("session.new", `click ${tabId}`);
       bumpCheckpointRefreshSeq(tabId);
@@ -1211,10 +1268,13 @@ export function useController() {
       app.ContextUsageForTab(tabId).then((context) => dispatchTo(tabId, { type: "context", context })).catch(() => {});
       void refreshCheckpoints(tabId);
     }
-  }, [activeTabId, bumpCheckpointRefreshSeq, bumpSessionLoadSeq, dispatchTo, loadSessionDataForTab, refreshCheckpoints]);
+  }, [activeTabId, bumpCheckpointRefreshSeq, bumpSessionLoadSeq, dispatchTo, loadSessionDataForTab, refreshCheckpoints, waitForBackendActiveTab]);
 
   const clearSession = useCallback(async () => {
     const tabId = activeTabId;
+    if (tabId && !(await waitForBackendActiveTab(tabId))) {
+      throw new Error("Tab activation has not completed");
+    }
     if (tabId) {
       bumpCheckpointRefreshSeq(tabId);
       bumpSessionLoadSeq(tabId);
@@ -1228,7 +1288,7 @@ export function useController() {
     if (tabId) bumpSessionLoadSeq(tabId);
     invalidateCache();
     if (tabId) dispatchTo(tabId, { type: "reset" });
-  }, [activeTabId, bumpCheckpointRefreshSeq, bumpSessionLoadSeq, dispatchTo, loadSessionDataForTab]);
+  }, [activeTabId, bumpCheckpointRefreshSeq, bumpSessionLoadSeq, dispatchTo, loadSessionDataForTab, waitForBackendActiveTab]);
 
   const listSessions = useCallback(async (): Promise<SessionMeta[]> => asArray<SessionMeta>(await app.ListSessions().catch(() => [])), []);
   const listTrashedSessions = useCallback(async (): Promise<SessionMeta[]> => asArray<SessionMeta>(await app.ListTrashedSessions().catch(() => [])), []);
@@ -1236,6 +1296,7 @@ export function useController() {
     const targetTabId = tabId || activeTabId;
     if (!targetTabId) return;
     if (tabId) await waitForTabReady(tabId);
+    else if (!(await waitForBackendActiveTab(targetTabId))) return;
     const seq = bumpSessionLoadSeq(targetTabId);
     dispatchTo(targetTabId, { type: "hydrate_start", reason: "resume-session" });
     let messages: HistoryMessage[];
@@ -1254,7 +1315,7 @@ export function useController() {
     dispatchTo(targetTabId, { type: "hydrate_done" });
     app.ContextUsageForTab(targetTabId).then((context) => dispatchTo(targetTabId, { type: "context", context })).catch(() => {});
     void refreshCheckpoints(targetTabId);
-  }, [activeTabId, bumpSessionLoadSeq, dispatchTo, refreshCheckpoints, sessionLoadCurrent, waitForTabReady]);
+  }, [activeTabId, bumpSessionLoadSeq, dispatchTo, refreshCheckpoints, sessionLoadCurrent, waitForBackendActiveTab, waitForTabReady]);
 
   const openChannelSession = useCallback(async (path: string, tabId: string) => {
     if (!tabId) return;
@@ -1308,7 +1369,13 @@ export function useController() {
     return refreshWorkspaceState(next);
   }, [refreshWorkspaceState]);
 
-  const compact = useCallback(() => { app.Compact().catch(() => {}); }, []);
+  const compact = useCallback(() => {
+    const tabId = activeTabIdRef.current;
+    if (!tabId) return;
+    void waitForBackendActiveTab(tabId).then((active) => {
+      if (active) app.Compact().catch(() => {});
+    });
+  }, [waitForBackendActiveTab]);
 
   const setModel = useCallback(async (name: string) => {
     if (!activeTabId) return;
@@ -1359,6 +1426,7 @@ export function useController() {
   const rewind = useCallback(async (turn: number, scope: string): Promise<boolean> => {
     const sourceTabId = activeTabId;
     if (!sourceTabId) return false;
+    if (!(await waitForBackendActiveTab(sourceTabId))) return false;
     const actionScope = (["fork", "summ-from", "summ-upto", "conversation", "code", "both"].includes(scope) ? scope : "both") as MessageActionScope;
     dispatchTo(sourceTabId, { type: "message_action_start", action: { turn, scope: actionScope } });
     dispatchTo(sourceTabId, { type: "local_notice", level: "info", text: messageActionBusyText(actionScope) });
@@ -1367,6 +1435,8 @@ export function useController() {
         const tab = await app.Fork(turn);
         if (tab?.id) {
           setActiveTabId(tab.id);
+          activeTabIdRef.current = tab.id;
+          confirmBackendActiveTab(tab.id);
           // The fork's controller builds in a background goroutine: an immediate
           // load reads empty history, and the ready-event fallback can still
           // target the source tab, leaving the fork blank (#3742).
@@ -1394,7 +1464,7 @@ export function useController() {
     } finally {
       dispatchTo(sourceTabId, { type: "message_action_done" });
     }
-  }, [activeTabId, dispatchTo, loadSessionDataForTab, syncActiveTabFromBackend, waitForTabReady]);
+  }, [activeTabId, confirmBackendActiveTab, dispatchTo, loadSessionDataForTab, syncActiveTabFromBackend, waitForBackendActiveTab, waitForTabReady]);
 
   // Tab management: switch preserves per-tab state; open creates it.
   const switchTab = useCallback(async (tabId: string, optimisticTab?: TabMeta): Promise<TabMeta[] | undefined> => {
@@ -1402,16 +1472,31 @@ export function useController() {
     addBreadcrumb("tab.switch", `click ${tabId}`);
     setActiveTabId(tabId);
     activeTabIdRef.current = tabId;
+    dispatchTo(tabId, { type: "backend_activation_start" });
     if (optimisticTab) {
       dispatchTo(tabId, { type: "optimistic_meta", meta: metaFromTab(optimisticTab, statesRef.current.get(tabId)?.meta) });
     }
     dispatchTo(tabId, { type: "hydrate_start", reason: "switch-tab" });
     addBreadcrumb("tab.switch", `active-rendered ${tabId} ms=${Date.now() - startedAt}`);
-    const backendSwitch = app.SetActiveTab(tabId)
-      .then(async () => {
+    const backendActivation = app.SetActiveTab(tabId)
+      .then(() => {
+        confirmBackendActiveTab(tabId);
         addBreadcrumb("tab.switch", `set-active-done ${tabId} ms=${Date.now() - startedAt}`);
+        return true;
+      })
+      .catch((err) => {
+        dispatchTo(tabId, { type: "backend_activation_done" });
+        dispatchTo(tabId, { type: "hydrate_error", reason: "switch-tab", error: errorMessage(err) });
+        return false;
+      });
+    trackBackendActivation(tabId, backendActivation);
+    const backendSwitch = backendActivation
+      .then(async (activated) => {
+        if (!activated) return undefined;
         const tabs = await reconcileTabRuntime(tabId, { hydrateSessionData: false });
-        void loadSessionDataForTab(tabId, false, "switch-tab");
+        void loadSessionDataForTab(tabId, false, "switch-tab", {
+          skipHistory: hasCachedLiveTurn(statesRef.current.get(tabId)),
+        });
         return tabs;
       })
       .catch((err) => {
@@ -1419,41 +1504,49 @@ export function useController() {
         return undefined;
       });
     return backendSwitch;
-  }, [dispatchTo, loadSessionDataForTab, reconcileTabRuntime]);
+  }, [confirmBackendActiveTab, dispatchTo, loadSessionDataForTab, reconcileTabRuntime, trackBackendActivation]);
 
   const openProjectTab = useCallback(async (workspaceRoot: string, topicId: string): Promise<TabMeta> => {
     const meta = await app.OpenProjectTab(workspaceRoot, topicId);
     setActiveTabId(meta.id);
+    activeTabIdRef.current = meta.id;
+    confirmBackendActiveTab(meta.id);
     dispatchTo(meta.id, { type: "optimistic_meta", meta: metaFromTab(meta, statesRef.current.get(meta.id)?.meta) });
     void loadSessionDataForTab(meta.id, !statesRef.current.has(meta.id), "open-topic");
     return meta;
-  }, [dispatchTo, loadSessionDataForTab]);
+  }, [confirmBackendActiveTab, dispatchTo, loadSessionDataForTab]);
 
   const openGlobalTab = useCallback(async (topicId: string): Promise<TabMeta> => {
     const meta = await app.OpenGlobalTab(topicId);
     setActiveTabId(meta.id);
+    activeTabIdRef.current = meta.id;
+    confirmBackendActiveTab(meta.id);
     dispatchTo(meta.id, { type: "optimistic_meta", meta: metaFromTab(meta, statesRef.current.get(meta.id)?.meta) });
     void loadSessionDataForTab(meta.id, !statesRef.current.has(meta.id), "open-topic");
     return meta;
-  }, [dispatchTo, loadSessionDataForTab]);
+  }, [confirmBackendActiveTab, dispatchTo, loadSessionDataForTab]);
 
   const openTopicSession = useCallback(async (scope: string, workspaceRoot: string, topicId: string, sessionPath: string): Promise<TabMeta> => {
     const meta = await app.OpenTopicSession(scope, workspaceRoot, topicId, sessionPath);
     setActiveTabId(meta.id);
+    activeTabIdRef.current = meta.id;
+    confirmBackendActiveTab(meta.id);
     dispatchTo(meta.id, { type: "optimistic_meta", meta: metaFromTab(meta, statesRef.current.get(meta.id)?.meta) });
     void loadSessionDataForTab(meta.id, !statesRef.current.has(meta.id), "open-topic");
     return meta;
-  }, [dispatchTo, loadSessionDataForTab]);
+  }, [confirmBackendActiveTab, dispatchTo, loadSessionDataForTab]);
 
   // Ensure a blank tab exists for the given scope — reuses an existing one
   // or creates a new tab, then loads its session data.
   const ensureBlankTab = useCallback(async (scope: string, workspaceRoot: string): Promise<TabMeta> => {
     const meta = await app.EnsureBlankTab(scope, workspaceRoot);
     setActiveTabId(meta.id);
+    activeTabIdRef.current = meta.id;
+    confirmBackendActiveTab(meta.id);
     dispatchTo(meta.id, { type: "optimistic_meta", meta: metaFromTab(meta, statesRef.current.get(meta.id)?.meta) });
     void loadSessionDataForTab(meta.id, !statesRef.current.has(meta.id), "open-topic");
     return meta;
-  }, [dispatchTo, loadSessionDataForTab]);
+  }, [confirmBackendActiveTab, dispatchTo, loadSessionDataForTab]);
 
   const closeTab = useCallback(async (tabId: string) => {
     try {

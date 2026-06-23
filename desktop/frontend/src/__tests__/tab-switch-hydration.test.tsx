@@ -127,14 +127,18 @@ const jobs: JobView[] = [];
 const checkpoints: CheckpointMeta[] = [];
 const tabA = tabMeta("tab-a", { active: true });
 const tabB = tabMeta("tab-b");
+const tabC = tabMeta("tab-c");
 let backendActiveId = "tab-a";
 const historyB = deferred<HistoryMessage[]>();
 const setActiveBGate = deferred<void>();
 const historyCalls: string[] = [];
 let setActiveCalls = 0;
+let newSessionCalls = 0;
+const runningTabs = new Set<string>();
+const tabsById = new Map([tabA, tabB, tabC].map((tab) => [tab.id, tab]));
 
 function currentTabs(): TabMeta[] {
-  return [tabA, tabB].map((tab) => ({ ...tab, active: tab.id === backendActiveId }));
+  return [tabA, tabB, tabC].map((tab) => ({ ...tab, active: tab.id === backendActiveId, running: runningTabs.has(tab.id) }));
 }
 
 window.runtime = {
@@ -145,7 +149,7 @@ window.go = {
   main: {
     App: {
       ListTabs: async () => currentTabs(),
-      MetaForTab: async (tabID: string) => metaFor(tabID === "tab-b" ? tabB : tabA),
+      MetaForTab: async (tabID: string) => metaFor(tabsById.get(tabID) ?? tabA),
       ContextUsageForTab: async () => context,
       EffortForTab: async () => effort,
       BalanceForTab: async () => balance,
@@ -156,11 +160,20 @@ window.go = {
         if (tabID === "tab-b") return historyB.promise;
         return [userMessage("cached A")];
       },
+      NewSession: async () => {
+        newSessionCalls += 1;
+      },
       ReplayPendingPrompts: async () => {},
       SetActiveTab: async (tabID: string) => {
         setActiveCalls += 1;
         if (tabID === "tab-b") await setActiveBGate.promise;
         backendActiveId = tabID;
+      },
+      SubmitToTab: async (tabID: string) => {
+        runningTabs.add(tabID);
+      },
+      SubmitDisplayToTab: async (tabID: string) => {
+        runningTabs.add(tabID);
       },
     } as Partial<AppBindings> as AppBindings,
   },
@@ -195,13 +208,23 @@ eq(controller?.activeTabId, "tab-b", "switchTab updates the active tab before ba
 eq(controller?.state.meta?.label, "model-tab-b", "switchTab applies optimistic tab metadata immediately");
 eq(controller?.state.items.length, 0, "uncached target tab does not keep the previous transcript visible");
 eq(controller?.state.hydrating, true, "target tab shows lightweight hydration state while backend activation is pending");
+eq(controller?.state.backendActivationPending, true, "target tab gates unscoped actions while backend activation is pending");
 ok(!historyCalls.includes("tab-b"), "HistoryForTab is not requested before SetActiveTab completes");
+
+let newSessionWhileSwitching: Promise<void> | undefined;
+await act(async () => {
+  newSessionWhileSwitching = controller?.newSession();
+  await flushPromises();
+});
+eq(newSessionCalls, 0, "newSession waits for backend activation before using the unscoped binding");
 
 await act(async () => {
   setActiveBGate.resolve();
   await switchToB;
+  await newSessionWhileSwitching;
   await flushPromises();
 });
+eq(newSessionCalls, 1, "newSession runs after the selected tab is active in the backend");
 await waitFor("tab-b history request", () => historyCalls.includes("tab-b"));
 
 await act(async () => {
@@ -219,6 +242,18 @@ await act(async () => {
 eq(controller?.activeTabId, "tab-a", "late history for another tab does not change the active tab");
 ok(controller?.state.items.some((item) => item.kind === "user" && item.text === "cached A") ?? false, "late history for another tab does not overwrite the active transcript");
 ok(!(controller?.state.items.some((item) => item.kind === "user" && item.text === "late B") ?? false), "late history stays scoped to its tab state");
+
+await act(async () => {
+  controller?.sendToTab("tab-c", "streaming C");
+  await flushPromises();
+});
+await act(async () => {
+  await controller?.switchTab("tab-c", tabC);
+  await flushPromises();
+});
+eq(controller?.activeTabId, "tab-c", "switching to a cached running tab still updates the active tab");
+ok(controller?.state.items.some((item) => item.kind === "user" && item.text === "streaming C") ?? false, "cached running tab keeps its optimistic transcript");
+ok(!historyCalls.includes("tab-c"), "cached running tab skips history hydration");
 
 await act(async () => {
   root.unmount();
