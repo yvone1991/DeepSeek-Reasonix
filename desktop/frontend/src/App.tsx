@@ -877,8 +877,10 @@ export default function App() {
     closeTab,
     reorderTabs,
     openTopicSession,
+    activateTopic,
     syncActiveTab,
     ensureBlankTab,
+    ensureBlankSurface,
   } = useController();
   const { locale, setPref: setLocalePref } = useI18n();
   const t = useT();
@@ -895,6 +897,7 @@ export default function App() {
   const [settingsTarget, setSettingsTarget] = useState<SettingsTab | null>(null);
   const [settingsFocus, setSettingsFocus] = useState<SettingsInitialFocus | null>(null);
   const [desktopLayoutStyle, setDesktopLayoutStyle] = useState<DesktopLayoutStyle>("workbench");
+  const singleSurfaceLayout = desktopLayoutStyle === "workbench" || desktopLayoutStyle === "creation";
   const [startupUpdateChecksEnabled, setStartupUpdateChecksEnabled] = useState<boolean | null>(null);
   const [histView, setHistView] = useState<HistoryViewState | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -1617,12 +1620,16 @@ export default function App() {
   }, [activeTab?.scope, activeTab?.workspaceRoot]);
 
   const openBlankSession = useCallback(async (scope: string, workspaceRoot: string) => {
-    await ensureBlankTab(scope, scope === "project" ? workspaceRoot : "");
+    if (singleSurfaceLayout) {
+      await ensureBlankSurface(scope, scope === "project" ? workspaceRoot : "");
+    } else {
+      await ensureBlankTab(scope, scope === "project" ? workspaceRoot : "");
+    }
     setProjectRevision((value) => value + 1);
     await refreshTabMetas();
     setTabRevealSignal((signal) => signal + 1);
     setTranscriptRevealSignal((signal) => signal + 1);
-  }, [ensureBlankTab, refreshTabMetas]);
+  }, [ensureBlankSurface, ensureBlankTab, refreshTabMetas, singleSurfaceLayout]);
 
   useEffect(() => {
     void refreshTabMetas();
@@ -2144,7 +2151,9 @@ export default function App() {
   const handleOpenTopic = useCallback(async (scope: string, workspaceRoot: string, topicId: string, sessionPath?: string) => {
     closeTransientOverlays();
     setSidebarImDetailConnectionId("");
-    if (sessionPath) {
+    if (singleSurfaceLayout) {
+      await activateTopic(scope, workspaceRoot, topicId, sessionPath || "");
+    } else if (sessionPath) {
       await openTopicSession(scope, workspaceRoot, topicId, sessionPath);
     } else if (scope === "global") {
       await openGlobalTab(topicId);
@@ -2154,7 +2163,7 @@ export default function App() {
     await refreshTabMetas();
     setTabRevealSignal((signal) => signal + 1);
     setTranscriptRevealSignal((signal) => signal + 1);
-  }, [closeTransientOverlays, openGlobalTab, openProjectTab, openTopicSession, refreshTabMetas]);
+  }, [activateTopic, closeTransientOverlays, openGlobalTab, openProjectTab, openTopicSession, refreshTabMetas, singleSurfaceLayout]);
 
   const openSidebarImConnectionSession = useCallback(async (connection: SidebarImConnection) => {
     const target = sidebarImSessionTarget(connection);
@@ -2165,15 +2174,21 @@ export default function App() {
     setSidebarImDetailConnectionId("");
     try {
       if (connection.sessionSource === "auto" && target.kind === "path") {
-        const tab = await ensureBlankTab(connection.scope, connection.scope === "project" ? connection.workspaceRoot : "");
+        const tab = singleSurfaceLayout
+          ? await ensureBlankSurface(connection.scope, connection.scope === "project" ? connection.workspaceRoot : "")
+          : await ensureBlankTab(connection.scope, connection.scope === "project" ? connection.workspaceRoot : "");
         await openChannelSession(target.value, tab.id);
       } else if (target.kind === "path") {
-        const tab = await ensureBlankTab(connection.scope, connection.scope === "project" ? connection.workspaceRoot : "");
+        const tab = singleSurfaceLayout
+          ? await ensureBlankSurface(connection.scope, connection.scope === "project" ? connection.workspaceRoot : "")
+          : await ensureBlankTab(connection.scope, connection.scope === "project" ? connection.workspaceRoot : "");
         await resumeSession(target.value, tab.id);
       } else if (connection.scope === "project") {
-        await openProjectTab(connection.workspaceRoot, target.value);
+        if (singleSurfaceLayout) await activateTopic("project", connection.workspaceRoot, target.value);
+        else await openProjectTab(connection.workspaceRoot, target.value);
       } else {
-        await openGlobalTab(target.value);
+        if (singleSurfaceLayout) await activateTopic("global", "", target.value);
+        else await openGlobalTab(target.value);
       }
       await refreshTabMetas();
       setTabRevealSignal((value) => value + 1);
@@ -2183,7 +2198,7 @@ export default function App() {
       console.warn("bot sidebar open failed", err);
       showToast(t("sidebar.imOpenFailed", { name: connection.title }));
     }
-  }, [ensureBlankTab, openChannelSession, openGlobalTab, openProjectTab, refreshTabMetas, resumeSession, showToast, t]);
+  }, [activateTopic, ensureBlankSurface, ensureBlankTab, openChannelSession, openGlobalTab, openProjectTab, refreshTabMetas, resumeSession, showToast, singleSurfaceLayout, t]);
 
   // History drawer: project menus can open a scoped saved-session list. Idle row
   // clicks resume; running row clicks only preview through PreviewSession.
@@ -2207,24 +2222,30 @@ export default function App() {
 
   const onResumeSession = useCallback(
     async (session: SessionMeta) => {
-      if (state.running) return;
+      if (state.running && !singleSurfaceLayout) return;
       const scope = session.scope || (session.workspaceRoot ? "project" : "global");
       try {
         let targetTab: TabMeta;
         if (isChannelSession(session)) {
-          targetTab = await ensureBlankTab(scope === "project" ? "project" : "global", scope === "project" ? session.workspaceRoot || "" : "");
+          targetTab = singleSurfaceLayout
+            ? await ensureBlankSurface(scope === "project" ? "project" : "global", scope === "project" ? session.workspaceRoot || "" : "")
+            : await ensureBlankTab(scope === "project" ? "project" : "global", scope === "project" ? session.workspaceRoot || "" : "");
           await openChannelSession(session.path, targetTab.id);
         } else if (scope === "project" && session.workspaceRoot && session.topicId) {
-          targetTab = await openProjectTab(session.workspaceRoot, session.topicId);
+          targetTab = singleSurfaceLayout
+            ? await activateTopic("project", session.workspaceRoot, session.topicId, session.path)
+            : await openProjectTab(session.workspaceRoot, session.topicId);
         } else if (scope === "global" && session.topicId) {
-          targetTab = await openGlobalTab(session.topicId);
+          targetTab = singleSurfaceLayout
+            ? await activateTopic("global", "", session.topicId, session.path)
+            : await openGlobalTab(session.topicId);
         } else {
           throw new Error(scope === "global" && !session.topicId
             ? t("history.failedOpenSession")
             : (session.topicId ? "Missing workspaceRoot" : t("history.failedOpenSession")));
         }
         setHistView(null);
-        if (!isChannelSession(session)) {
+        if (!isChannelSession(session) && !singleSurfaceLayout) {
           await resumeSession(session.path, targetTab.id);
         }
         await refreshTabMetas();
@@ -2240,7 +2261,7 @@ export default function App() {
         }
       }
     },
-    [ensureBlankTab, openChannelSession, openGlobalTab, openProjectTab, refreshTabMetas, state.running, resumeSession, t, showToast],
+    [activateTopic, ensureBlankSurface, ensureBlankTab, openChannelSession, openGlobalTab, openProjectTab, refreshTabMetas, state.running, resumeSession, singleSurfaceLayout, t, showToast],
   );
 
   // Command palette: ⌘K / Ctrl+K opens a fuzzy navigator over commands and
@@ -3336,7 +3357,9 @@ export default function App() {
       {needsOnboarding && <OnboardingOverlay onComplete={() => setNeedsOnboarding(false)} />}
 
       <HeartbeatPanel open={heartbeatOpen} onClose={() => setHeartbeatOpen(false)} onOpenTopic={(scope, workspaceRoot, topicId) => {
-        if (scope === "project" && workspaceRoot) {
+        if (singleSurfaceLayout) {
+          activateTopic(scope, workspaceRoot, topicId);
+        } else if (scope === "project" && workspaceRoot) {
           openProjectTab(workspaceRoot, topicId);
         } else {
           openGlobalTab(topicId);

@@ -1749,7 +1749,13 @@ func (a *App) SetDesktopAppearance(theme, style string) error {
 // SetDesktopLayoutStyle updates only the desktop layout style. It does not
 // rebuild the active controller and must stay out of provider-visible requests.
 func (a *App) SetDesktopLayoutStyle(style string) error {
-	return a.applyConfigOnly(func(c *config.Config) error { return c.SetDesktopLayoutStyle(style) })
+	if err := a.applyConfigOnly(func(c *config.Config) error { return c.SetDesktopLayoutStyle(style) }); err != nil {
+		return err
+	}
+	if singleSurfaceLayoutStyle(style) {
+		return a.applySingleSurfaceTabPolicy()
+	}
+	return nil
 }
 
 // SetDesktopCheckUpdates updates only the desktop startup update-check

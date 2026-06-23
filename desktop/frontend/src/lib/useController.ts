@@ -1536,6 +1536,16 @@ export function useController() {
     return meta;
   }, [confirmBackendActiveTab, dispatchTo, loadSessionDataForTab]);
 
+  const activateTopic = useCallback(async (scope: string, workspaceRoot: string, topicId: string, sessionPath = ""): Promise<TabMeta> => {
+    const meta = await app.ActivateTopic(scope, workspaceRoot, topicId, sessionPath);
+    for (const id of Array.from(statesRef.current.keys())) {
+      if (id !== meta.id) statesRef.current.delete(id);
+    }
+    setActiveTabId(meta.id);
+    await loadSessionDataForTab(meta.id, true);
+    return meta;
+  }, [loadSessionDataForTab]);
+
   // Ensure a blank tab exists for the given scope — reuses an existing one
   // or creates a new tab, then loads its session data.
   const ensureBlankTab = useCallback(async (scope: string, workspaceRoot: string): Promise<TabMeta> => {
@@ -1547,6 +1557,16 @@ export function useController() {
     void loadSessionDataForTab(meta.id, !statesRef.current.has(meta.id), "open-topic");
     return meta;
   }, [confirmBackendActiveTab, dispatchTo, loadSessionDataForTab]);
+
+  const ensureBlankSurface = useCallback(async (scope: string, workspaceRoot: string): Promise<TabMeta> => {
+    const meta = await app.EnsureBlankSurface(scope, workspaceRoot);
+    for (const id of Array.from(statesRef.current.keys())) {
+      if (id !== meta.id) statesRef.current.delete(id);
+    }
+    setActiveTabId(meta.id);
+    await loadSessionDataForTab(meta.id, true);
+    return meta;
+  }, [loadSessionDataForTab]);
 
   const closeTab = useCallback(async (tabId: string) => {
     try {
@@ -1570,7 +1590,7 @@ export function useController() {
     newSession, clearSession, listSessions, listTrashedSessions, resumeSession, openChannelSession, previewSession, deleteSession, restoreSession, purgeTrashedSession, renameSession,
     refreshMeta, pickWorkspace, switchWorkspace, compact, rewind, setModel, setEffort, setTokenMode,
     fetchMemory, remember, forget, saveDoc,
-    switchTab, openProjectTab, openGlobalTab, openTopicSession, ensureBlankTab, closeTab, reorderTabs,
+    switchTab, openProjectTab, openGlobalTab, openTopicSession, ensureBlankTab, activateTopic, ensureBlankSurface, closeTab, reorderTabs,
     syncActiveTab: syncActiveTabFromBackend,
   };
 }

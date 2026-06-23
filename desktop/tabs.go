@@ -1105,6 +1105,37 @@ func (a *App) OpenTopicSession(scope, workspaceRoot, topicID, sessionPath string
 	return a.openTopicTab(scope, workspaceRoot, topicID, validPath)
 }
 
+// ActivateTopic opens a topic into the single visible conversation surface used
+// by layouts without a tab strip. It delegates the actual open/reuse behavior to
+// the classic tab path, then prunes every non-active visible tab so historical
+// clicks do not accumulate hidden startup work.
+func (a *App) ActivateTopic(scope, workspaceRoot, topicID, sessionPath string) (TabMeta, error) {
+	var meta TabMeta
+	var err error
+	if strings.TrimSpace(sessionPath) != "" {
+		meta, err = a.OpenTopicSession(scope, workspaceRoot, topicID, sessionPath)
+	} else if strings.TrimSpace(scope) == "project" {
+		meta, err = a.OpenProjectTab(workspaceRoot, topicID)
+	} else {
+		meta, err = a.OpenGlobalTab(topicID)
+	}
+	if err != nil {
+		return TabMeta{}, err
+	}
+	return a.keepOnlyVisibleTab(meta.ID)
+}
+
+// EnsureBlankSurface mirrors EnsureBlankTab for no-tab-strip layouts: after
+// creating or reusing a blank session, it removes other visible tabs while
+// preserving running runtimes as detached background sessions.
+func (a *App) EnsureBlankSurface(scope, workspaceRoot string) (TabMeta, error) {
+	meta, err := a.EnsureBlankTab(scope, workspaceRoot)
+	if err != nil {
+		return TabMeta{}, err
+	}
+	return a.keepOnlyVisibleTab(meta.ID)
+}
+
 func tabMatchesTopicTarget(tab *WorkspaceTab, scope, workspaceRoot, topicID string) bool {
 	if tab == nil || tab.Scope != scope || tab.TopicID != topicID {
 		return false
@@ -1113,6 +1144,12 @@ func tabMatchesTopicTarget(tab *WorkspaceTab, scope, workspaceRoot, topicID stri
 		return true
 	}
 	return normalizeProjectRoot(tab.WorkspaceRoot) == normalizeProjectRoot(workspaceRoot)
+}
+
+func tabInWorkspace(tab *WorkspaceTab, workspaceRoot string) bool {
+	return tab != nil &&
+		tab.Scope == "project" &&
+		normalizeProjectRoot(tab.WorkspaceRoot) == normalizeProjectRoot(workspaceRoot)
 }
 
 // EnsureBlankTab activates the existing blank tab for the target scope, or
@@ -1468,6 +1505,89 @@ func (a *App) CloseTab(tabID string) error {
 		tab.sink.clearContext() // stop further emissions (nil ctx -> Emit becomes no-op)
 	}
 	return nil
+}
+
+func (a *App) keepOnlyVisibleTab(tabID string) (TabMeta, error) {
+	a.mu.Lock()
+	active := a.tabs[tabID]
+	if active == nil {
+		a.mu.Unlock()
+		return TabMeta{}, fmt.Errorf("tab %q not found", tabID)
+	}
+	a.activeTabID = tabID
+	removed := make([]*WorkspaceTab, 0, len(a.tabs)-1)
+	for id, tab := range a.tabs {
+		if id == tabID {
+			continue
+		}
+		removed = append(removed, tab)
+		delete(a.tabs, id)
+		a.removeTabOrderLocked(id)
+	}
+	a.tabOrder = []string{tabID}
+	a.saveTabsLocked()
+	meta := a.tabMeta(active, true)
+	a.mu.Unlock()
+
+	for _, tab := range removed {
+		a.removeVisibleTabRuntime(tab)
+	}
+	a.emitProjectTreeChanged()
+	return enrichTabMeta(meta), nil
+}
+
+func (a *App) applySingleSurfaceTabPolicy() error {
+	a.mu.RLock()
+	tabID := a.activeTabID
+	if tabID == "" || a.tabs[tabID] == nil {
+		for _, id := range a.tabOrder {
+			if a.tabs[id] != nil {
+				tabID = id
+				break
+			}
+		}
+		if tabID == "" {
+			for id := range a.tabs {
+				tabID = id
+				break
+			}
+		}
+	}
+	a.mu.RUnlock()
+	if tabID == "" {
+		return nil
+	}
+	_, err := a.keepOnlyVisibleTab(tabID)
+	return err
+}
+
+func (a *App) removeVisibleTabRuntime(tab *WorkspaceTab) {
+	if tab == nil {
+		return
+	}
+	if tab.Ctrl != nil && !tab.ReadOnly {
+		_ = tab.Ctrl.Snapshot()
+	}
+	if tab.Ctrl != nil && tab.hasActiveRuntimeWork() && a.detachSessionRuntime(tab) {
+		return
+	}
+	a.closeTabRuntime(tab)
+}
+
+func (a *App) closeTabRuntime(tab *WorkspaceTab) {
+	if tab == nil {
+		return
+	}
+	if tab.Ctrl != nil {
+		tab.Ctrl.SetSessionPath("") // future snapshots become no-ops
+		a.quiesceTabAutosave(tab)
+		tab.Ctrl.Cancel()
+		tab.Ctrl.Close()
+		a.releaseTabSharedHost(tab)
+	}
+	if tab.sink != nil {
+		tab.sink.clearContext()
+	}
 }
 
 // buildTabController assembles a controller for a tab in the background, the
@@ -2065,6 +2185,31 @@ type desktopTabEntry struct {
 type desktopTabsFile struct {
 	Tabs      []desktopTabEntry `json:"tabs"`
 	ActiveTab string            `json:"activeTab"`
+}
+
+func singleSurfaceLayoutStyle(style string) bool {
+	switch strings.ToLower(strings.TrimSpace(style)) {
+	case "workbench", "creation":
+		return true
+	default:
+		return false
+	}
+}
+
+func singleSurfaceTabsFile(f desktopTabsFile) desktopTabsFile {
+	if len(f.Tabs) <= 1 {
+		return f
+	}
+	chosen := f.Tabs[0]
+	if active := strings.TrimSpace(f.ActiveTab); active != "" {
+		for _, entry := range f.Tabs {
+			if entry.ID == active {
+				chosen = entry
+				break
+			}
+		}
+	}
+	return desktopTabsFile{Tabs: []desktopTabEntry{chosen}, ActiveTab: chosen.ID}
 }
 
 func desktopConfigDir() string {
