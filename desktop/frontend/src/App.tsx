@@ -96,7 +96,28 @@ import {
   toggleYoloToolApprovalMode,
   type RestorableToolApprovalMode,
 } from "./lib/toolApprovalMode";
-import { loadLayoutSize, saveLayoutSize } from "./lib/layoutPreferences";
+import {
+  CREATION_SIDEBAR_MIN_WIDTH,
+  RIGHT_DOCK_MAX_WIDTH,
+  RIGHT_DOCK_MIN_RENDER_WIDTH,
+  RIGHT_DOCK_PREVIEW_DEFAULT_WIDTH,
+  RIGHT_DOCK_PREVIEW_MIN_WIDTH,
+  RIGHT_DOCK_TREE_MAX_WIDTH,
+  RIGHT_DOCK_TREE_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  clampCreationSidebarWidth,
+  clampRightDockPreviewWidth,
+  clampRightDockTreeWidth,
+  clampSidebarWidth,
+  defaultRightDockTreeWidth,
+  defaultSidebarWidth,
+  saveRightDockPreviewWidth,
+  saveRightDockTreeWidth,
+  saveSidebarCollapsed,
+  saveSidebarWidth,
+  useLayoutStore,
+} from "./store/layout";
 import { hydrateDisplayMode } from "./lib/displayMode";
 import { DEFAULT_STATUS_BAR_ITEMS, normalizeStatusBarItems, type StatusBarItemId } from "./lib/statusBarItems";
 import { sessionActivityTime } from "./lib/session";
@@ -121,12 +142,6 @@ import logoWordmark from "./assets/logo-wordmark.svg";
 const HistoryPanel = lazy(() => import("./components/HistoryPanel").then((module) => ({ default: module.HistoryPanel })));
 const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((module) => ({ default: module.SettingsPanel })));
 
-const SIDEBAR_COLLAPSED_KEY = "reasonix.sidebar.collapsed";
-const SIDEBAR_DEFAULT_WIDTH = 264;
-const SIDEBAR_MIN_WIDTH = 264;
-const CREATION_SIDEBAR_MIN_WIDTH = 236;
-const SIDEBAR_MAX_WIDTH = 300;
-const SIDEBAR_VIEWPORT_RATIO = 0.18;
 const CHAT_MIN_WIDTH = 400;
 const CHAT_COMFORT_MIN_WIDTH = 560;
 const WORKSPACE_RESIZER_WIDTH = 8;
@@ -157,14 +172,6 @@ function normalizeDesktopLayoutStyle(style: string | undefined): DesktopLayoutSt
   if (style === "creation") return "creation";
   return "classic";
 }
-const RIGHT_DOCK_TREE_DEFAULT_WIDTH = 300;
-const RIGHT_DOCK_TREE_MIN_WIDTH = 300;
-const RIGHT_DOCK_TREE_MAX_WIDTH = 560;
-const RIGHT_DOCK_PREVIEW_DEFAULT_WIDTH = 660;
-const RIGHT_DOCK_PREVIEW_MIN_WIDTH = 420;
-const RIGHT_DOCK_MIN_RENDER_WIDTH = 280;
-const RIGHT_DOCK_MAX_WIDTH = 860;
-
 type RightDockMode = "context" | "files" | "changed";
 const SHOW_CONTEXT_DOCK = true;
 type HistoryScopeFilter = { scope: "global" | "project"; workspaceRoot: string };
@@ -618,63 +625,6 @@ function activeTopicTurnsFromTree(tree: ProjectNode[], tab?: TabMeta): number | 
   return walk(tree);
 }
 
-function clampSidebarWidth(width: number): number {
-  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
-}
-
-function clampCreationSidebarWidth(width: number): number {
-  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(CREATION_SIDEBAR_MIN_WIDTH, Math.round(width)));
-}
-
-function clampStoredSidebarWidth(width: number): number {
-  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(CREATION_SIDEBAR_MIN_WIDTH, Math.round(width)));
-}
-
-function clampRightDockPreviewWidth(width: number): number {
-  return Math.min(RIGHT_DOCK_MAX_WIDTH, Math.max(RIGHT_DOCK_PREVIEW_MIN_WIDTH, Math.round(width)));
-}
-
-function clampRightDockTreeWidth(width: number): number {
-  return Math.min(RIGHT_DOCK_TREE_MAX_WIDTH, Math.max(RIGHT_DOCK_TREE_MIN_WIDTH, Math.round(width)));
-}
-
-function defaultSidebarWidth(): number {
-  if (typeof window !== "undefined") {
-    return clampSidebarWidth(window.innerWidth * SIDEBAR_VIEWPORT_RATIO);
-  }
-  return SIDEBAR_DEFAULT_WIDTH;
-}
-
-function defaultRightDockTreeWidth(): number {
-  return RIGHT_DOCK_TREE_DEFAULT_WIDTH;
-}
-
-function loadSidebarCollapsed(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function saveSidebarCollapsed(collapsed: boolean): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
-  } catch {
-    /* ignore storage failures */
-  }
-}
-
-function loadSidebarWidth(): number {
-  return loadLayoutSize("sidebarWidthGraphite", defaultSidebarWidth(), clampStoredSidebarWidth);
-}
-
-function saveSidebarWidth(width: number): void {
-  saveLayoutSize("sidebarWidthGraphite", width, clampStoredSidebarWidth);
-}
-
 function normalizeDesktopPlatform(value: string): DesktopPlatform {
   if (value === "darwin" || value === "windows") return value;
   return "linux";
@@ -695,22 +645,6 @@ function detectBrowserPlatform(): DesktopPlatform {
   if (/Win/i.test(marker)) return "windows";
   if (/Mac/i.test(marker)) return "darwin";
   return "linux";
-}
-
-function loadRightDockTreeWidth(): number {
-  return loadLayoutSize("rightDockTreeWidth", defaultRightDockTreeWidth(), clampRightDockTreeWidth);
-}
-
-function saveRightDockTreeWidth(width: number): void {
-  saveLayoutSize("rightDockTreeWidth", width, clampRightDockTreeWidth);
-}
-
-function loadRightDockPreviewWidth(): number {
-  return loadLayoutSize("rightDockPreviewWidth", RIGHT_DOCK_PREVIEW_DEFAULT_WIDTH, clampRightDockPreviewWidth);
-}
-
-function saveRightDockPreviewWidth(width: number): void {
-  saveLayoutSize("rightDockPreviewWidth", width, clampRightDockPreviewWidth);
 }
 
 function tabWorkspaceTitle(tab?: TabMeta): string {
@@ -907,7 +841,8 @@ export default function App() {
   const [sidebarImConnections, setSidebarImConnections] = useState<SidebarImConnection[]>([]);
   const [imTopicSources, setImTopicSources] = useState<Record<string, SidebarImTopicSource>>({});
   const [sidebarImDetailConnectionId, setSidebarImDetailConnectionId] = useState("");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(loadSidebarCollapsed);
+  const sidebarCollapsed = useLayoutStore((s) => s.sidebarCollapsed);
+  const setSidebarCollapsed = useLayoutStore((s) => s.setSidebarCollapsed);
   const [heartbeatOpen, setHeartbeatOpen] = useState(false);
   type TimeFilter = "all" | "10" | "20" | "1h" | "3h" | "5h" | "1d";
   const [topicTimeFilter, setTopicTimeFilter] = useState<TimeFilter>(() => {
@@ -920,12 +855,15 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("projectTree:timeFilter", topicTimeFilter); } catch { /* ignore */ }
   }, [topicTimeFilter]);
-  const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
+  const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
+  const setSidebarWidth = useLayoutStore((s) => s.setSidebarWidth);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(true);
-  const [rightDockTreeWidth, setRightDockTreeWidth] = useState(loadRightDockTreeWidth);
-  const [rightDockPreviewWidth, setRightDockPreviewWidth] = useState(loadRightDockPreviewWidth);
+  const rightDockTreeWidth = useLayoutStore((s) => s.rightDockTreeWidth);
+  const setRightDockTreeWidth = useLayoutStore((s) => s.setRightDockTreeWidth);
+  const rightDockPreviewWidth = useLayoutStore((s) => s.rightDockPreviewWidth);
+  const setRightDockPreviewWidth = useLayoutStore((s) => s.setRightDockPreviewWidth);
   const [workspacePreviewActive, setWorkspacePreviewActive] = useState(false);
   // Bump dockRefreshKey after each turn so WorkspacePanel/ContextPanel re-fetch
   // workspace changes, git history, and session metadata after AI tool writes.
