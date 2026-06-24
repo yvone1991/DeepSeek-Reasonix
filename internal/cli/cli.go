@@ -492,9 +492,8 @@ func runServe(args []string) int {
 	// Auto-save target: reuse the resumed file, else a fresh one — same as chat.
 	if *resume != "" {
 		ctrl.Resume(resumeSession, *resume)
-	} else if ctrl.SessionDir() != "" {
-		ctrl.SetSessionPath(agent.NewSessionPath(ctrl.SessionDir(), ctrl.Label()))
 	}
+	ctrl.EnsureSessionPath()
 
 	srv := serve.New(ctrl, bc, serveCfg)
 	fmt.Printf("reasonix serve — %s on http://%s\n", ctrl.Label(), *addr)
@@ -597,15 +596,14 @@ func chatREPL(args []string) int {
 	// file so closing/reopening keeps appending to the same history; a fresh
 	// session lands in a new file stamped with the model name.
 	if resumePath != "" {
-		if loaded, err := agent.LoadSession(resumePath); err != nil {
+		loaded, err := agent.LoadSession(resumePath)
+		if err != nil {
 			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 			return 1
-		} else {
-			ctrl.Resume(loaded, resumePath)
 		}
-	} else if ctrl.SessionDir() != "" {
-		ctrl.SetSessionPath(agent.NewSessionPath(ctrl.SessionDir(), ctrl.Label()))
+		ctrl.Resume(loaded, resumePath)
 	}
+	ctrl.EnsureSessionPath()
 
 	// Surface a missing-key warning inside the TUI banner so the first message
 	// failing is at least pre-announced; the user can still enter chat.
@@ -657,11 +655,7 @@ func chatREPL(args []string) int {
 		// Keep the carried conversation in its existing file so the switch doesn't
 		// orphan a duplicate (#2807).
 		path := agent.ContinueSessionPath(resumePath, c.SessionDir(), c.Label())
-		if len(carry) > 0 {
-			c.Resume(&agent.Session{Messages: carry}, path)
-		} else if path != "" {
-			c.SetSessionPath(path)
-		}
+		c.AdoptHistory(carry, path)
 		c.EnableInteractiveApproval()
 		if *yolo {
 			c.SetAutoApproveTools(true)
