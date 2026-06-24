@@ -1143,6 +1143,17 @@ export default function App() {
     () => tabMetas.find((tab) => tab.id === activeTabId) ?? tabMetas.find((tab) => tab.active),
     [activeTabId, tabMetas],
   );
+  const composerSessionKey = useMemo(() => {
+    if (!activeTab) return activeTabId ?? "";
+    const scope = activeTab.scope === "project" ? "project" : "global";
+    const workspaceRoot = scope === "project" ? activeTab.workspaceRoot || "" : "";
+    const topicId = activeTab.topicId || "";
+    const sessionPath = activeTab.sessionPath || "";
+    if (topicId || sessionPath) {
+      return ["session", scope, workspaceRoot, topicId, sessionPath].join("\u0000");
+    }
+    return ["tab", activeTab.id || activeTabId || ""].join("\u0000");
+  }, [activeTab, activeTabId]);
   const sidebarImDetailConnection = useMemo(
     () => sidebarImConnections.find((connection) => connection.id === sidebarImDetailConnectionId) ?? null,
     [sidebarImConnections, sidebarImDetailConnectionId],
@@ -3166,6 +3177,7 @@ export default function App() {
               turnTokens={state.turnTokens}
               retry={state.retry}
               transientDismissSignal={transientOverlayDismissSignal}
+              sessionKey={composerSessionKey}
             />
             <StatusBar
               context={state.context}
